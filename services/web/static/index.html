@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Laboratory — independent studies, notes and published work." />
+    <title>Laboratory</title>
+    <!-- seo:head -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <script src="/scripts/theme-init.js"></script>
+    <link rel="stylesheet" href="/styles.css" />
+    <noscript><link rel="stylesheet" href="/noscript.css" /></noscript>
+  </head>
+  <body class="home-page page-loading">
+    <div class="topbar topbar-over-image">
+      <a class="home-link dynamic-text" data-site-title href="/"></a>
+      <div class="topbar-right">
+        <div class="clock-label dynamic-text" data-clock></div>
+        <button class="theme-toggle dynamic-text" type="button" data-theme-toggle aria-label="Change color theme"></button>
+      </div>
+    </div>
+
+    <main class="curtain-root">
+      <section id="hero" class="panel hero-panel">
+        <div class="hero-overlay"></div>
+        <div id="heroNoise" class="noise-layer" aria-hidden="true"></div>
+        <div class="hero-content">
+          <h1 id="heroTitle" class="dynamic-text"></h1>
+        </div>
+        <p id="heroSubtitle" class="hero-subtitle-bottom dynamic-text"></p>
+      </section>
+
+      <section class="panel choice-panel" aria-label="Laboratory sections">
+        <a id="aboutLink" class="choice-card left-card" href="/about">
+          <div class="choice-overlay"></div>
+          <span id="aboutLabel" class="dynamic-text"></span>
+        </a>
+        <a id="journalLink" class="choice-card right-card" href="/journal">
+          <div class="choice-overlay"></div>
+          <span id="journalLabel" class="dynamic-text"></span>
+        </a>
+      </section>
+    </main>
+
+    <script src="/scripts/film-grain.js"></script>
+    <script type="module" src="/scripts/main.js"></script>
+  </body>
+</html>

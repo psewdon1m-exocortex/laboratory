@@ -1,0 +1,9 @@
+.git
+.github
+.env*
+.secrets
+data/runtime
+services/api/node_modules
+tmp
+release-artifacts*
+*.log

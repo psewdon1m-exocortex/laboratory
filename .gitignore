@@ -1,0 +1,9 @@
+.env
+.secrets/*.txt
+data/runtime/
+services/api/node_modules/
+coverage/
+*.log
+dist/
+tmp/
+release-artifacts*/

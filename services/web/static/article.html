@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en" class="article-root">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Article — Laboratory</title>
+    <!-- seo:head -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <script src="/scripts/theme-init.js"></script>
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/vendor/open-node-viewer.css" />
+    <noscript><link rel="stylesheet" href="/noscript.css" /></noscript>
+  </head>
+  <body class="article-page page-loading">
+    <div class="reading-progress" data-reading-progress aria-hidden="true"></div>
+    <div class="article-top-fade" aria-hidden="true"></div>
+    <header class="article-reader-header">
+      <a class="article-back dynamic-text" href="/journal" data-article-back>← Back to Journal</a>
+      <button class="theme-toggle dynamic-text" type="button" data-theme-toggle aria-label="Change color theme"></button>
+    </header>
+    <main class="article-reader">
+      <header class="article-reader-title dynamic-text">
+        <h1 data-article-title></h1>
+        <p class="article-publication-date" data-article-date></p>
+      </header>
+      <section class="article-document" data-article-document aria-live="polite"><!-- ssr:article-document --></section>
+      <div class="article-abstract-slot" data-article-abstract><!-- ssr:article-abstract --></div>
+      <div class="pdf-placeholder" data-article-error hidden>
+        <p>This article could not be loaded.</p>
+      </div>
+      <footer class="article-end">
+        <button class="article-back-to-top" type="button" data-back-to-top aria-label="Back to top">&#8593;</button>
+      </footer>
+    </main>
+    <script type="module" src="/scripts/article.js"></script>
+  </body>
+</html>

@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow, noarchive" />
+    <title>Laboratory Admin</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <script src="/scripts/theme-init.js"></script>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="admin-page">
+    <header class="admin-topbar">
+      <a href="/">Open Laboratory</a>
+      <button class="theme-toggle" type="button" data-theme-toggle aria-label="Change color theme"></button>
+    </header>
+    <main class="admin-root">
+      <header class="admin-heading">
+        <p>Laboratory / private</p>
+        <h1>Admin panel</h1>
+      </header>
+
+      <section class="admin-card admin-login" data-login-card>
+        <h2>Sign in</h2>
+        <form class="admin-form" data-login-form>
+          <label>Username <input name="username" autocomplete="username" required /></label>
+          <label>Password <input name="password" type="password" autocomplete="current-password" required /></label>
+          <button type="submit">Sign in</button>
+        </form>
+      </section>
+
+      <div class="admin-protected" data-admin-protected hidden>
+        <div class="admin-session-row">
+          <span data-session-label></span>
+          <button class="button-quiet" type="button" data-logout>Sign out</button>
+        </div>
+
+        <form class="admin-sections" data-content-form>
+          <section class="admin-card section-card">
+            <div class="section-heading"><h2>Identity</h2><p>English-only public labels.</p></div>
+            <div class="section-grid">
+              <label>Site title <input name="siteTitle" maxlength="60" required /></label>
+              <label>Hero title <input name="heroTitle" maxlength="60" required /></label>
+              <label class="wide-field">Hero subtitle <input name="heroSubtitle" maxlength="120" required /></label>
+              <label>About Me title <input name="aboutTitle" maxlength="60" required /></label>
+              <label>Journal title <input name="journalTitle" maxlength="60" required /></label>
+              <label>Time zone <input name="timeZone" maxlength="80" required /></label>
+              <label>Default theme
+                <select name="themeDefault">
+                  <option value="system">System</option>
+                  <option value="dark">Dark</option>
+                  <option value="light">Light</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section class="admin-card section-card">
+            <div class="section-heading"><h2>Atmosphere</h2><p>Original grain treatment and page imagery.</p></div>
+            <div class="section-grid compact-grid">
+              <label class="check-field"><input name="noiseEnabled" type="checkbox" /> Film grain</label>
+              <label>Intensity <input name="noiseIntensity" type="range" min="0" max="100" /></label>
+              <label>Grain <input name="noiseGrain" type="range" min="0" max="100" /></label>
+            </div>
+            <div class="upload-grid" data-upload-grid></div>
+          </section>
+
+          <div class="admin-save-wrap"><button type="submit">Save changes</button></div>
+        </form>
+
+        <section class="admin-card section-card">
+          <div class="section-heading"><h2>Article library</h2><p>ZIP archives, Markdown/PDF revisions and GitHub publication.</p></div>
+          <form class="article-import-form" data-article-import-form>
+            <label class="button-file">Import article ZIP<input name="file" type="file" accept="application/zip,.zip" required /></label>
+            <label>Initial state
+              <select name="status">
+                <option value="published">Published</option>
+                <option value="unpublished">Unpublished</option>
+              </select>
+            </label>
+            <label>Title override <input name="title" maxlength="160" placeholder="Archive filename by default" /></label>
+            <button type="submit">Import</button>
+          </form>
+          <div class="library-toolbar">
+            <button type="button" class="button-quiet" data-library-sync>Sync from GitHub</button>
+            <span data-library-status></span>
+          </div>
+          <div class="admin-articles" data-admin-articles></div>
+          <section class="article-editor" data-article-editor hidden>
+            <div class="article-editor-heading">
+              <div><p data-editor-id></p><h3 data-editor-heading></h3></div>
+              <div class="article-editor-actions">
+                <a class="button-link" data-editor-download href="#">Download ZIP</a>
+                <button class="button-quiet" type="button" data-editor-collapse>Collapse</button>
+              </div>
+            </div>
+            <form class="article-editor-form" data-article-editor-form>
+              <div class="section-grid">
+                <label>Title <input name="title" maxlength="160" required /></label>
+                <label>URL slug <input name="slug" maxlength="100" required /></label>
+                <label>State
+                  <select name="status">
+                    <option value="published">Published</option>
+                    <option value="unpublished">Unpublished</option>
+                  </select>
+                </label>
+                <label class="wide-field markdown-source-field" data-markdown-field>Markdown source
+                  <textarea name="markdownSource" rows="22" spellcheck="true"></textarea>
+                </label>
+              </div>
+              <button type="submit">Save revision</button>
+            </form>
+            <div class="article-file-actions">
+              <label class="button-file">Replace article.md / article.pdf<input type="file" accept="application/pdf,text/markdown,.pdf,.md" data-main-file /></label>
+              <label class="button-file">Add media<input type="file" data-article-media /></label>
+              <label class="button-file">Add attachment<input type="file" data-article-attachment /></label>
+            </div>
+            <div class="article-files" data-article-files></div>
+            <div class="article-revisions" data-article-revisions></div>
+            <div class="article-delete-wrap">
+              <button class="button-danger" type="button" data-editor-delete>Delete article</button>
+            </div>
+          </section>
+        </section>
+
+        <section class="admin-card section-card">
+          <div class="section-heading"><h2>System</h2><p>Kernel Registry, local Updater and recovery.</p></div>
+          <dl class="runtime-grid" data-runtime></dl>
+          <div class="system-actions">
+            <a class="button-link" href="/api/admin/backup" data-backup-download>Download backup</a>
+            <a class="button-link" href="/api/admin/audit/export">Download audit log</a>
+            <label class="button-file">Restore backup<input type="file" accept="application/zip,.zip" data-restore-input /></label>
+            <button type="button" class="button-quiet" data-update-check>Check for update</button>
+          </div>
+          <p class="admin-note" data-update-result></p>
+        </section>
+      </div>
+    </main>
+    <dialog class="site-dialog" data-confirm-dialog aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message">
+      <div class="site-dialog-kicker">Laboratory / private</div>
+      <h2 id="confirm-dialog-title" data-confirm-title>Confirm action</h2>
+      <p id="confirm-dialog-message" data-confirm-message></p>
+      <div class="site-dialog-actions">
+        <button class="button-quiet" type="button" data-confirm-cancel>Cancel</button>
+        <button type="button" data-confirm-accept>Confirm</button>
+      </div>
+    </dialog>
+    <div class="toast" data-toast hidden></div>
+    <script type="module" src="/scripts/admin.js"></script>
+  </body>
+</html>

@@ -1,0 +1,126 @@
+name: Release Laboratory
+
+on:
+  push:
+    tags:
+      - "laboratory-v*"
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: laboratory-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: services/api/package-lock.json
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Resolve and validate version
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#laboratory-v}"
+          [[ "$GITHUB_REF_NAME" == "laboratory-v${version}" ]]
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          [[ "$(node -p "require('./services/api/package.json').version")" == "$version" ]]
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Test release source
+        working-directory: services/api
+        run: |
+          npm ci
+          npm test
+          npm audit --omit=dev --audit-level=high
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish candidate once
+        id: candidate
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.release.outputs.image }}:candidate-${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Smoke-test the exact published digest
+        shell: bash
+        env:
+          IMAGE: ${{ steps.release.outputs.image }}@${{ steps.candidate.outputs.digest }}
+        run: |
+          set -euo pipefail
+          name="laboratory-release-${GITHUB_RUN_ID}"
+          volume="laboratory-release-${GITHUB_RUN_ID}"
+          docker pull "$IMAGE"
+          docker volume create "$volume" >/dev/null
+          trap 'docker rm -f "$name" >/dev/null 2>&1 || true; docker volume rm "$volume" >/dev/null 2>&1 || true' EXIT
+          docker run -d --name "$name" --read-only --init --cap-drop ALL \
+            --security-opt no-new-privileges:true --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+            --mount "type=volume,source=$volume,target=/app/data" -p 127.0.0.1::18380 \
+            -e LABORATORY_ADMIN_USERNAME=release-operator \
+            -e LABORATORY_ADMIN_PASSWORD=release-test-password \
+            -e LABORATORY_SESSION_SECRET=release-test-session-secret-32-characters \
+            -e LABORATORY_COOKIE_SECURE=true \
+            -e LABORATORY_PUBLIC_URL=https://laboratory.example.test \
+            -e LABORATORY_AI_PIPELINE_ENABLED=0 "$IMAGE"
+          port=$(docker inspect --format '{{(index (index .NetworkSettings.Ports "18380/tcp") 0).HostPort}}' "$name")
+          for _ in {1..45}; do
+            curl -fsS --max-time 2 "http://127.0.0.1:$port/api/health" >/dev/null && break
+            if [ "$(docker inspect --format '{{.State.Status}}' "$name")" = exited ]; then docker logs "$name"; exit 1; fi
+            sleep 2
+          done
+          curl -fsS "http://127.0.0.1:$port/about" | grep -q '<main'
+
+      - name: Promote the tested digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          source="${{ steps.release.outputs.image }}@${{ steps.candidate.outputs.digest }}"
+          docker buildx imagetools create \
+            --tag "${{ steps.release.outputs.image }}:${{ steps.release.outputs.version }}" \
+            --tag "${{ steps.release.outputs.image }}:latest" "$source"
+          promoted=$(docker buildx imagetools inspect \
+            "${{ steps.release.outputs.image }}:${{ steps.release.outputs.version }}" \
+            --format '{{.Manifest.Digest}}')
+          test "$promoted" = "${{ steps.candidate.outputs.digest }}"
+
+      - name: Build and verify release artifacts
+        env:
+          IMAGE_REFERENCE: ${{ steps.release.outputs.image }}
+          IMAGE_DIGEST: ${{ steps.candidate.outputs.digest }}
+        run: |
+          bash scripts/build-release.sh "${{ steps.release.outputs.version }}"
+          node scripts/verify-release.mjs release-artifacts/laboratory-release.json
+          (cd release-artifacts && sha256sum -c "laboratory-${{ steps.release.outputs.version }}-compose.tar.gz.sha256")
+
+      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: "release-artifacts/*"
+
+      - name: Publish immutable GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release-artifacts/* \
+            --verify-tag --latest=false --generate-notes \
+            --title "Laboratory ${{ steps.release.outputs.version }}"

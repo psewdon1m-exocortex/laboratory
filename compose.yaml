@@ -1,0 +1,16 @@
+name: laboratory-local
+
+services:
+  laboratory:
+    build:
+      context: .
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:${LABORATORY_LISTEN_PORT:-18380}:${LABORATORY_LISTEN_PORT:-18380}"
+    volumes:
+      - laboratory-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  laboratory-data:

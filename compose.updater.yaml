@@ -1,0 +1,5 @@
+# Compatibility overlay retained for installations that still pass this file.
+# Updater connectivity now lives in compose.production.yaml because Updater
+# intentionally reuses one installed Compose file during image replacement.
+services:
+  laboratory: {}

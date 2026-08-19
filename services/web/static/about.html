@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>About Me — Laboratory</title>
+    <!-- seo:head -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <script src="/scripts/theme-init.js"></script>
+    <link rel="stylesheet" href="/styles.css" />
+    <noscript><link rel="stylesheet" href="/noscript.css" /></noscript>
+  </head>
+  <body class="about-page page-loading">
+    <div class="page-transition-overlay" data-transition-overlay aria-hidden="true"></div>
+    <div id="aboutNoise" class="noise-layer fixed-noise" aria-hidden="true"></div>
+    <div class="topbar journal-topbar">
+      <a class="home-link dynamic-text" data-site-title href="/"></a>
+      <div class="topbar-right">
+        <div class="clock-label dynamic-text" data-clock></div>
+        <button class="theme-toggle dynamic-text" type="button" data-theme-toggle aria-label="Change color theme"></button>
+      </div>
+    </div>
+    <main class="about-shell">
+      <header class="about-heading">
+        <h1 class="about-title dynamic-text" data-about-title><!-- ssr:about-title --></h1>
+      </header>
+      <section class="about-content">
+        <article class="about-markdown article-markdown" data-about-document aria-live="polite"></article>
+        <div class="about-placeholder" data-about-placeholder hidden>
+          <p>Upload an About Me Markdown file in the private administration area.</p>
+        </div>
+      </section>
+    </main>
+    <!-- ssr:page-data -->
+    <script src="/scripts/film-grain.js"></script>
+    <script type="module" src="/scripts/about.js"></script>
+  </body>
+</html>

@@ -1,0 +1,33 @@
+.dynamic-text {
+  opacity: 1 !important;
+}
+
+.journal-stage,
+.journal-index,
+.journal-list {
+  min-height: auto;
+  height: auto;
+}
+
+.journal-rail,
+.article-preview,
+.journal-controls {
+  display: none !important;
+}
+
+.journal-list {
+  position: relative;
+  display: grid;
+  gap: 1rem;
+  padding: 2rem clamp(1.5rem, 8vw, 8rem) 5rem;
+}
+
+.journal-item {
+  position: relative;
+  inset: auto;
+  max-width: 60rem;
+  transform: none !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  white-space: normal;
+}

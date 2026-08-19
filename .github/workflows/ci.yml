@@ -1,0 +1,101 @@
+name: Laboratory CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: laboratory-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: services/api/package-lock.json
+
+      - name: Deterministic install, tests and dependency audit
+        working-directory: services/api
+        run: |
+          npm ci
+          npm test
+          npm audit --omit=dev --audit-level=high
+
+      - name: Syntax and release contract checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          find services/api/src services/api/tests scripts -type f \( -name '*.js' -o -name '*.mjs' \) -print0 \
+            | xargs -0 -n1 node --check
+          sh -n install.sh
+          sh -n scripts/bootstrap.sh
+          bash -n scripts/build-release.sh
+          rm -rf release-artifacts-ci
+          GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+            IMAGE_REFERENCE="ghcr.io/${GITHUB_REPOSITORY,,}" \
+            IMAGE_DIGEST="sha256:$(printf 'a%.0s' {1..64})" \
+            bash scripts/build-release.sh 0.0.0-ci release-artifacts-ci
+          node scripts/verify-release.mjs release-artifacts-ci/laboratory-release.json
+          (cd release-artifacts-ci && sha256sum -c laboratory-0.0.0-ci-compose.tar.gz.sha256)
+
+      - name: Validate production Compose
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .env.example .ci.env
+          sed -i \
+            -e 's|^KERNEL_URL=.*|KERNEL_URL=https://kernel.example.test|' \
+            -e 's|^KERNEL_SERVICE_TOKEN=.*|KERNEL_SERVICE_TOKEN=ci-kernel-service-token|' \
+            -e 's|^LABORATORY_ADMIN_PASSWORD=.*|LABORATORY_ADMIN_PASSWORD=ci-admin-password-strong|' \
+            -e 's|^LABORATORY_IMAGE=.*|LABORATORY_IMAGE=ghcr.io/example/laboratory@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|' \
+            -e 's|^LABORATORY_SESSION_SECRET=.*|LABORATORY_SESSION_SECRET=ci-session-secret-with-at-least-32-characters|' \
+            -e 's|^LABORATORY_CONTENT_GITHUB_TOKEN=.*|LABORATORY_CONTENT_GITHUB_TOKEN=ci-github-token|' \
+            -e 's|^LABORATORY_CONTENT_WEBHOOK_SECRET=.*|LABORATORY_CONTENT_WEBHOOK_SECRET=ci-webhook-secret|' \
+            -e 's|^UPDATER_SOCKET_GID=.*|UPDATER_SOCKET_GID=0|' \
+            -e 's|^UPDATER_CONTROL_TOKEN=.*|UPDATER_CONTROL_TOKEN=ci-updater-control-token-32-characters|' \
+            .ci.env
+          docker compose --env-file .ci.env -f compose.production.yaml config --quiet
+          ! docker compose --env-file .ci.env -f compose.production.yaml config | grep -q 'CHANGE_ME'
+
+      - name: Build and smoke-test hardened container
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="laboratory-ci:${GITHUB_SHA}"
+          name="laboratory-ci-${GITHUB_RUN_ID}"
+          volume="laboratory-ci-${GITHUB_RUN_ID}"
+          docker build --tag "$image" .
+          docker volume create "$volume" >/dev/null
+          trap 'docker rm -f "$name" >/dev/null 2>&1 || true; docker volume rm "$volume" >/dev/null 2>&1 || true' EXIT
+          docker run -d --name "$name" --read-only --init \
+            --cap-drop ALL --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+            --mount "type=volume,source=$volume,target=/app/data" \
+            -p 127.0.0.1::18380 \
+            -e LABORATORY_ADMIN_USERNAME=release-operator \
+            -e LABORATORY_ADMIN_PASSWORD=release-test-password \
+            -e LABORATORY_SESSION_SECRET=release-test-session-secret-32-characters \
+            -e LABORATORY_COOKIE_SECURE=true \
+            -e LABORATORY_PUBLIC_URL=https://laboratory.example.test \
+            -e LABORATORY_AI_PIPELINE_ENABLED=0 \
+            "$image"
+          port=$(docker inspect --format '{{(index (index .NetworkSettings.Ports "18380/tcp") 0).HostPort}}' "$name")
+          for _ in {1..45}; do
+            curl -fsS --max-time 2 "http://127.0.0.1:$port/api/health" >/dev/null && break
+            if [ "$(docker inspect --format '{{.State.Status}}' "$name")" = exited ]; then docker logs "$name"; exit 1; fi
+            sleep 2
+          done
+          curl -fsS "http://127.0.0.1:$port/api/health" | grep -q '"status":"ok"'
+          curl -fsS "http://127.0.0.1:$port/about" | grep -q '<main'
+          curl -fsS "http://127.0.0.1:$port/robots.txt" | grep -q 'User-agent: Google-Extended'
+          test "$(docker inspect --format '{{.Config.User}}' "$name")" = node
