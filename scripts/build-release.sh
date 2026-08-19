@@ -43,7 +43,7 @@ cat > "$root/$output/laboratory-release.json" <<EOF
     "sha256": "$bundle_sha"
   },
   "minimum_updater_version": "$minimum_updater_version",
-  "database_schema": 3,
+  "database_schema": 4,
   "backup_schema": "exocortex.laboratory.backup.v3",
   "compose_contract": 2,
   "release_notes_url": "https://github.com/${repository}/releases/tag/laboratory-v${version}"

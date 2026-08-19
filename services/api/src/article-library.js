@@ -67,10 +67,11 @@ function toPublicStatus(value) {
 }
 
 export class ArticleLibrary {
-  constructor({ db, uploadsDir, config }) {
+  constructor({ db, uploadsDir, config, recordContentEvent = () => null }) {
     this.db = db;
     this.config = config;
     this.rootDir = path.join(uploadsDir, "library");
+    this.recordContentEvent = recordContentEvent;
   }
 
   async initialize() {
@@ -295,6 +296,7 @@ export class ArticleLibrary {
     const currentRevision = article ? this.revisionRow(article.current_revision_id) : null;
     const previousSlug = article?.slug || null;
     const wasPublished = article?.source_status === "published";
+    const previousPublishedRevision = article?.published_revision_id ? this.revisionRow(article.published_revision_id) : null;
     if (currentRevision?.source_sha256 === parsed.sourceSha256 && currentRevision.state === storageStatus
         && currentRevision.title === parsed.title && slug === article.slug) {
       return { article: this.readArticle(article, currentRevision, true), changed: false, assignedId: !parsed.internalId, archive: await this.exportArchive(article.internal_id) };
@@ -339,7 +341,11 @@ export class ArticleLibrary {
       let publishedRevisionId = article.published_revision_id;
       if (storageStatus === "published") {
         if (!publishedAt) publishedAt = options.publishedAt || now;
-        else if (publishedRevisionId && this.revisionRow(publishedRevisionId)?.source_sha256 !== parsed.sourceSha256) revisedAt = now;
+        else if (publishedRevisionId && (
+          previousPublishedRevision?.source_sha256 !== parsed.sourceSha256
+          || previousPublishedRevision?.title !== parsed.title
+          || previousSlug !== slug
+        )) revisedAt = now;
         publishedRevisionId = revisionId;
       }
       this.db.prepare(`
@@ -361,6 +367,27 @@ export class ArticleLibrary {
         `).run(previousSlug, now);
       }
       if (storageStatus === "published") this.db.prepare("DELETE FROM gone_urls WHERE slug = ?").run(slug);
+      if (wasPublished || storageStatus === "published") {
+        const eventType = wasPublished && storageStatus !== "published"
+          ? "ContentUnpublished"
+          : !wasPublished && storageStatus === "published"
+            ? "ContentPublished"
+            : previousSlug !== slug
+              ? "CanonicalChanged"
+              : "ContentUpdated";
+        const eventTimestamp = this.recordContentEvent({
+          eventType,
+          scope: "journal",
+          entityId: internalId,
+          slug,
+          previousSlug: previousSlug !== slug ? previousSlug : null,
+          occurredAt: now,
+        });
+        if (storageStatus === "published" && revisedAt === now && eventTimestamp !== now) {
+          revisedAt = eventTimestamp;
+          this.db.prepare("UPDATE library_articles SET revised_at = ? WHERE id = ?").run(revisedAt, article.id);
+        }
+      }
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -625,6 +652,15 @@ export class ArticleLibrary {
         ON CONFLICT(slug) DO UPDATE SET removed_at = excluded.removed_at, reason = excluded.reason, replacement_slug = NULL
       `);
       for (const slug of slugs) gone.run(slug, removedAt);
+      if (article.source_status === "published") {
+        this.recordContentEvent({
+          eventType: "ContentDeleted",
+          scope: "journal",
+          entityId: article.internal_id,
+          slug: article.slug,
+          occurredAt: removedAt,
+        });
+      }
       this.db.prepare("DELETE FROM library_articles WHERE id = ?").run(article.id);
       this.db.exec("COMMIT");
     } catch (error) {

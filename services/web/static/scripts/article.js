@@ -85,26 +85,30 @@ function updateProgress() {
   document.querySelector("[data-reading-progress]").style.transform = `scaleX(${progress})`;
 }
 
-function renderAbstract(root, article) {
+function appendDerivedDetails(root, label, sourceHtml, headingPattern) {
+  if (!sourceHtml) return;
+  const details = document.createElement("details");
+  details.className = "article-abstract";
+  const summary = document.createElement("summary");
+  summary.textContent = label;
+  const body = document.createElement("div");
+  body.className = "article-abstract-body";
+  body.innerHTML = sourceHtml;
+  const firstElement = body.firstElementChild;
+  if (firstElement && headingPattern.test(firstElement.textContent.trim())) firstElement.remove();
+  details.append(summary, body);
+  root.append(details);
+}
+
+function renderDerivedContent(root, article) {
   root.replaceChildren();
-  if (!article.abstractHtml) {
+  if (!article.abstractHtml && !(article.format === "pdf" && article.transcriptHtml)) {
     root.hidden = true;
     return;
   }
   root.hidden = false;
-  const details = document.createElement("details");
-  details.className = "article-abstract";
-  const summary = document.createElement("summary");
-  summary.textContent = "Abstract";
-  const body = document.createElement("div");
-  body.className = "article-abstract-body";
-  body.innerHTML = article.abstractHtml;
-  const firstElement = body.firstElementChild;
-  if (firstElement && /^H[12]$/.test(firstElement.tagName) && firstElement.textContent.trim().toLowerCase() === "abstract") {
-    firstElement.remove();
-  }
-  details.append(summary, body);
-  root.append(details);
+  appendDerivedDetails(root, "Abstract", article.abstractHtml, /^abstract$/i);
+  if (article.format === "pdf") appendDerivedDetails(root, "Text version", article.transcriptHtml, /^(?:generated\s+)?transcript$/i);
 }
 
 async function initialize() {
@@ -142,7 +146,7 @@ async function initialize() {
       width: Math.min(1240, Math.max(280, window.innerWidth - (window.innerWidth < 760 ? 24 : 120))),
     });
   }
-  renderAbstract(document.querySelector("[data-article-abstract]"), article);
+  renderDerivedContent(document.querySelector("[data-article-abstract]"), article);
   window.addEventListener("scroll", updateProgress, { passive: true });
   window.addEventListener("resize", updateProgress);
   document.querySelector("[data-back-to-top]").addEventListener("click", () => {

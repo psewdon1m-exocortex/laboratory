@@ -93,18 +93,20 @@ export async function createLaboratoryApp(overrides = {}) {
   const baseUrl = (req) => publicBaseUrl(req, config, register);
   const publishedArticles = () => store.listArticles({ sort: "newest" });
   const publishedArticleDetails = () => publishedArticles().map((article) => store.getArticle(article.slug)).filter(Boolean);
+  const contentModifiedAt = (scopes, entityId = null) => store.contentModifiedAt(scopes, entityId);
   const aboutPage = async () => {
     const markdown = await store.readAsset("aboutMarkdown");
     return {
-      bodyHtml: markdown ? renderMarkdownDocument(markdown.data.toString("utf8")) : "",
+      bodyHtml: markdown ? renderMarkdownDocument(markdown.data.toString("utf8"), { headingOffset: 1 }) : "",
       updatedAt: markdown?.updated_at ?? null,
     };
   };
   const pageModifiedDates = async () => {
-    const articles = publishedArticles();
-    const journal = articles.map((article) => article.revisedAt || article.publishedAt).filter(Boolean).sort().at(-1) || null;
-    const about = await store.readAsset("aboutMarkdown");
-    return { home: content().updatedAt, about: about?.updated_at || content().updatedAt, journal };
+    return {
+      home: contentModifiedAt(["site", "home"]),
+      about: contentModifiedAt(["site", "about"]),
+      journal: contentModifiedAt(["site", "journal"]),
+    };
   };
   const readAboutMarkdown = async () => {
     const markdown = await store.readAsset("aboutMarkdown");
@@ -114,7 +116,7 @@ export async function createLaboratoryApp(overrides = {}) {
   const agentCatalog = new AgentCatalog({
     store, evidenceIndex, config, content, aboutPage, readAboutMarkdown,
   });
-  const sendText = (res, type, value, cache = "public, max-age=300, stale-while-revalidate=3600") => {
+  const sendText = (res, type, value, cache = "public, max-age=0, must-revalidate") => {
     const bytes = Buffer.from(String(value));
     const etag = `"${crypto.createHash("sha256").update(bytes).digest("base64url")}"`;
     res.setHeader("Content-Type", type);
@@ -238,7 +240,7 @@ export async function createLaboratoryApp(overrides = {}) {
       contentModifiedAt: item.revisedAt || item.publishedAt,
       language: config.defaultLanguage,
     }));
-    res.setHeader("Cache-Control", "public, max-age=300, stale-while-revalidate=3600");
+    res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
     res.json({ items });
   });
 
@@ -247,7 +249,7 @@ export async function createLaboratoryApp(overrides = {}) {
     if (!article) return res.status(404).json({ error: "Article not found" });
     const origin = baseUrl(req);
     const site = content();
-    res.setHeader("Cache-Control", "public, max-age=300, stale-while-revalidate=3600");
+    res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
     res.json({
       id: article.internalId,
       slug: article.slug,
@@ -272,7 +274,7 @@ export async function createLaboratoryApp(overrides = {}) {
       query: req.query.q, mode: req.query.mode, limit: req.query.limit, offset,
       baseUrl: baseUrl(req),
     });
-    res.setHeader("Cache-Control", "public, max-age=120, stale-while-revalidate=600");
+    res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
     res.json({ query: result.query, mode: result.mode, count: result.items.length, total: result.total, offset, items: result.items });
   });
 
@@ -617,7 +619,7 @@ export async function createLaboratoryApp(overrides = {}) {
       const dates = await pageModifiedDates();
       const pageLatest = Object.values(dates).filter(Boolean).sort().at(-1) || null;
       setLastModified(res, pageLatest);
-      sendText(res, "application/xml; charset=utf-8", buildSitemapIndex(baseUrl(req), publishedArticles(), pageLatest));
+      sendText(res, "application/xml; charset=utf-8", buildSitemapIndex(baseUrl(req), publishedArticles(), pageLatest, dates.journal));
     } catch (error) { next(error); }
   });
   app.get("/sitemaps/pages-0001.xml", async (req, res, next) => {
@@ -631,22 +633,24 @@ export async function createLaboratoryApp(overrides = {}) {
   app.get(/^\/sitemaps\/articles-(\d{4})\.xml$/, (req, res) => {
     const shard = Number.parseInt(req.params[0], 10);
     if (shard < 1) return res.status(404).type("text/plain").send("Not found");
-    const modified = publishedArticles().map((article) => article.revisedAt || article.publishedAt).filter(Boolean).sort().at(-1);
+    const modified = contentModifiedAt(["site", "journal"]);
     setLastModified(res, modified);
     sendText(res, "application/xml; charset=utf-8", buildArticlesSitemap(baseUrl(req), publishedArticles(), shard));
   });
   app.get("/llms.txt", (req, res) => {
     setAgentLinks(req, res);
+    setLastModified(res, contentModifiedAt(["site", "journal"]));
     sendText(res, "text/markdown; charset=utf-8", buildLlms(baseUrl(req), content(), publishedArticleDetails()));
   });
   app.get("/llms-full.txt", (req, res) => {
     res.setHeader("Deprecation", "true");
     res.setHeader("Link", `<${new URL("/llms.txt", `${baseUrl(req)}/`)}>; rel="successor-version"`);
+    setLastModified(res, contentModifiedAt(["site", "journal"]));
     sendText(res, "text/markdown; charset=utf-8", buildLlms(baseUrl(req), content(), publishedArticleDetails(), { full: true }));
   });
   app.get("/feed.xml", (req, res) => {
     const articles = publishedArticleDetails();
-    setLastModified(res, articles.map((article) => article.revisedAt || article.publishedAt).filter(Boolean).sort().at(-1));
+    setLastModified(res, contentModifiedAt(["site", "journal"]));
     sendText(res, "application/rss+xml; charset=utf-8", buildFeed(baseUrl(req), content(), articles));
   });
 
@@ -654,6 +658,7 @@ export async function createLaboratoryApp(overrides = {}) {
     res.setHeader("X-Robots-Tag", "noindex, follow");
     res.setHeader("Content-Location", new URL("/index.md", `${baseUrl(req)}/`).toString());
     setAgentLinks(req, res, "", "/");
+    setLastModified(res, contentModifiedAt(["site", "home"]));
     sendText(res, "text/markdown; charset=utf-8", agentCatalog.homeMarkdownDocument(baseUrl(req)));
   });
   app.get("/about.md", async (req, res, next) => {
@@ -661,6 +666,7 @@ export async function createLaboratoryApp(overrides = {}) {
       res.setHeader("X-Robots-Tag", "noindex, follow");
       res.setHeader("Content-Location", new URL("/about.md", `${baseUrl(req)}/`).toString());
       setAgentLinks(req, res, "", "/about");
+      setLastModified(res, contentModifiedAt(["site", "about"]));
       sendText(res, "text/markdown; charset=utf-8", await agentCatalog.aboutMarkdownDocument(baseUrl(req)));
     } catch (error) { next(error); }
   });
@@ -668,6 +674,7 @@ export async function createLaboratoryApp(overrides = {}) {
     res.setHeader("X-Robots-Tag", "noindex, follow");
     res.setHeader("Content-Location", new URL("/journal.md", `${baseUrl(req)}/`).toString());
     setAgentLinks(req, res, "", "/journal");
+    setLastModified(res, contentModifiedAt(["site", "journal"]));
     sendText(res, "text/markdown; charset=utf-8", agentCatalog.journalMarkdownDocument(baseUrl(req)));
   });
   app.get(/^\/journal\/([^/]+)\.md$/, (req, res) => {
@@ -683,13 +690,14 @@ export async function createLaboratoryApp(overrides = {}) {
     const machine = agentCatalog.get(article.internalId, { baseUrl: baseUrl(req), include: ["content"] });
     res.setHeader("X-Robots-Tag", "noindex, follow");
     res.setHeader("Content-Location", new URL(`/journal/${encodeURIComponent(article.slug)}.md`, `${baseUrl(req)}/`).toString());
-    setLastModified(res, article.revisedAt || article.publishedAt);
+    setLastModified(res, contentModifiedAt(["site", "journal"], article.internalId));
     setAgentLinks(req, res, "", `/journal/${encodeURIComponent(article.slug)}`);
     sendText(res, "text/markdown; charset=utf-8", machine.contentMarkdown);
   });
 
   app.get("/", (req, res) => {
     setAgentLinks(req, res, "/index.md");
+    setLastModified(res, contentModifiedAt(["site", "home"]));
     sendText(res, "text/html; charset=utf-8", renderHomePage(templates.get("index.html"), {
       content: content(), baseUrl: baseUrl(req), nonce: req.cspNonce, authorName: config.defaultAuthorName,
     }));
@@ -697,6 +705,7 @@ export async function createLaboratoryApp(overrides = {}) {
   app.get("/about", async (req, res, next) => {
     try {
       setAgentLinks(req, res, "/about.md");
+      setLastModified(res, contentModifiedAt(["site", "about"]));
       sendText(res, "text/html; charset=utf-8", renderAboutPage(templates.get("about.html"), {
         content: content(), about: await aboutPage(), baseUrl: baseUrl(req), nonce: req.cspNonce,
         authorName: config.defaultAuthorName,
@@ -705,6 +714,7 @@ export async function createLaboratoryApp(overrides = {}) {
   });
   app.get("/journal", (req, res) => {
     setAgentLinks(req, res, "/journal.md");
+    setLastModified(res, contentModifiedAt(["site", "journal"]));
     sendText(res, "text/html; charset=utf-8", renderJournalPage(templates.get("journal.html"), {
       content: content(), articles: publishedArticles(), baseUrl: baseUrl(req), nonce: req.cspNonce,
       authorName: config.defaultAuthorName,
@@ -720,7 +730,7 @@ export async function createLaboratoryApp(overrides = {}) {
       return res.status(gone ? 410 : 404).sendFile("404.html", { root: config.publicDir });
     }
     if (article.slug !== requested) return res.redirect(308, `/journal/${encodeURIComponent(article.slug)}`);
-    setLastModified(res, article.revisedAt || article.publishedAt);
+    setLastModified(res, contentModifiedAt(["site", "journal"], article.internalId));
     setAgentLinks(req, res, `/journal/${encodeURIComponent(article.slug)}.md`);
     sendText(res, "text/html; charset=utf-8", renderArticlePage(templates.get("article.html"), {
       content: content(), article, baseUrl: baseUrl(req), nonce: req.cspNonce, authorName: config.defaultAuthorName,

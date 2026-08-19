@@ -159,9 +159,17 @@ function addStableHeadingIds(value) {
   ));
 }
 
-export function renderMarkdownDocument(source) {
+function offsetHeadings(value, offset) {
+  const amount = Math.max(0, Math.min(5, Number(offset) || 0));
+  if (!amount) return value;
+  return value.replace(/<(\/?)h([1-6])(\b[^>]*)>/gi, (_match, closing, level, attributes) => (
+    `<${closing}h${Math.min(6, Number(level) + amount)}${attributes}>`
+  ));
+}
+
+export function renderMarkdownDocument(source, { headingOffset = 0 } = {}) {
   marked.use({ gfm: true, breaks: false });
-  const html = marked.parse(String(source ?? ""), { async: false });
+  const html = offsetHeadings(marked.parse(String(source ?? ""), { async: false }), headingOffset);
   return addStableHeadingIds(sanitize(html));
 }
 
@@ -172,7 +180,7 @@ export function renderArticleMarkdown(source, files, context) {
     return match ? `\n${directiveHtml(match[1], match[2], files, context, referenced)}\n` : line;
   }).join("\n");
   marked.use({ gfm: true, breaks: false });
-  let html = marked.parse(transformed, { async: false });
+  let html = offsetHeadings(marked.parse(transformed, { async: false }), context.headingOffset ?? 1);
   html = appendAttachments(html, files, context, referenced);
   const warnings = files.filter((file) => file.kind === "media" && !referenced.has(file.path)).map((file) => `Unused media file: ${file.path}`);
   return { html: addStableHeadingIds(sanitize(html)), warnings, referenced: [...referenced] };

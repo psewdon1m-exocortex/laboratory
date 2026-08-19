@@ -5,6 +5,7 @@ New backups use `exocortex.laboratory.backup.v3` inside `exocortex.laboratory.ba
 ## Included state
 
 - site settings and uploaded About/Hero/Journal assets;
+- the monotonic public-content lifecycle/freshness journal;
 - stable article identities, slugs and aliases;
 - every article revision, source file, media and attachment;
 - deleted/unpublished URL tombstones and Git synchronization state;
@@ -26,7 +27,7 @@ Every restore first writes a mode `0600` pre-restore checkpoint under `data/rest
 ## Drill procedure
 
 1. Download a backup from `/private`.
-2. Restore it into a clean temporary deployment and compare article IDs, revisions, assets, derivatives and counts.
+2. Restore it into a clean temporary deployment and compare article IDs, revisions, assets, derivatives, public-content events and counts.
 3. Restore over deliberately changed state and confirm old orphans disappear.
 4. Verify corrupt member, traversal and compression-bomb fixtures are rejected before mutation.
 5. Force an insertion failure and verify both database and files retain the pre-restore state.

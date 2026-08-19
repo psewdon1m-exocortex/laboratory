@@ -26,6 +26,7 @@ function backupRecordCounts(snapshot) {
   return {
     settings: snapshot.settings?.length || 0,
     assets: snapshot.assets?.length || 0,
+    contentEvents: snapshot.contentEvents?.length || 0,
     articles: library.articles?.length || snapshot.articles?.length || 0,
     revisions: library.revisions?.length || 0,
     files: library.files?.length || 0,

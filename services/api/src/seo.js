@@ -2,13 +2,26 @@ import crypto from "node:crypto";
 
 const ARTICLE_SHARD_SIZE = 45_000;
 
-export const PUBLIC_PAGE_REGISTRY = Object.freeze([
-  { id: "home", pathname: "/", markdownPath: "/index.md", schemaType: "WebSite" },
-  { id: "about", pathname: "/about", markdownPath: "/about.md", schemaType: "AboutPage" },
-  { id: "journal", pathname: "/journal", markdownPath: "/journal.md", schemaType: "CollectionPage" },
-]);
+export const PAGE_TYPE_REGISTRY = Object.freeze([
+  { id: "home", route: "/", pathname: "/", status: 200, rendering: "server", indexing: "index", canonical: "self", sitemap: "pages", schema: ["WebSite"] },
+  { id: "about", route: "/about", pathname: "/about", status: 200, rendering: "server", indexing: "index", canonical: "self", sitemap: "pages", schema: ["AboutPage", "Person"] },
+  { id: "journal", route: "/journal", pathname: "/journal", status: 200, rendering: "server", indexing: "index", canonical: "self", sitemap: "pages", schema: ["CollectionPage"] },
+  { id: "article", route: "/journal/{slug}", status: 200, rendering: "server", indexing: "by_content_state", canonical: "self_or_redirect", sitemap: "articles", schema: ["Article"] },
+  { id: "private", route: "/private", status: 200, rendering: "server", indexing: "noindex", canonical: "none", sitemap: "none", schema: [], authentication: "required" },
+  { id: "not_found", route: "*", status: 404, rendering: "server", indexing: "noindex_by_status", canonical: "none", sitemap: "none", schema: [] },
+].map(Object.freeze));
+
+const REQUIRED_PAGE_FIELDS = Object.freeze(["id", "route", "status", "rendering", "indexing", "canonical", "sitemap", "schema"]);
+for (const page of PAGE_TYPE_REGISTRY) {
+  for (const field of REQUIRED_PAGE_FIELDS) {
+    if (!(field in page)) throw new Error(`Page type ${page.id || "<unknown>"} is missing ${field}`);
+  }
+}
+
+export const PUBLIC_PAGE_REGISTRY = Object.freeze(PAGE_TYPE_REGISTRY.filter((page) => page.sitemap === "pages"));
 
 const PRIVATE_ROBOT_PATHS = Object.freeze(["/private", "/admin", "/api/admin/", "/api/internal/"]);
+export const BOT_POLICY_VERSION = "2026-08-20.1";
 export const BOT_POLICY_REGISTRY = Object.freeze([
   { agent: "GPTBot", allowPublic: false },
   { agent: "ClaudeBot", allowPublic: false },
@@ -267,13 +280,27 @@ export function renderJournalPage(template, { content, articles, baseUrl, nonce,
 
 function readableDate(value) {
   if (!value) return "";
-  return new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(value));
+  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(value));
 }
 
-function articleAbstractMarkup(article) {
-  if (!article.abstractHtml) return "";
-  const body = article.abstractHtml.replace(/^\s*<h[1-2]\b[^>]*>\s*Abstract\s*<\/h[1-2]>\s*/i, "");
-  return `<details class="article-abstract"><summary>Abstract</summary><div class="article-abstract-body">${body}</div></details>`;
+function publicationDateMarkup(article) {
+  const published = readableDate(article.publishedAt);
+  return article.revisedAt ? `${published} · revised ${readableDate(article.revisedAt)}` : published;
+}
+
+function derivedDetails(label, html, headingPattern) {
+  if (!html) return "";
+  const body = html.replace(headingPattern, "");
+  return `<details class="article-abstract"><summary>${escapeHtml(label)}</summary><div class="article-abstract-body">${body}</div></details>`;
+}
+
+function articleDerivedMarkup(article) {
+  return [
+    derivedDetails("Abstract", article.abstractHtml, /^\s*<h[1-3]\b[^>]*>\s*Abstract\s*<\/h[1-3]>\s*/i),
+    article.format === "pdf"
+      ? derivedDetails("Text version", article.transcriptHtml, /^\s*<h[1-3]\b[^>]*>\s*(?:Generated\s+)?Transcript\s*<\/h[1-3]>\s*/i)
+      : "",
+  ].filter(Boolean).join("\n");
 }
 
 export function renderArticlePage(template, { content, article, baseUrl, nonce, authorName }) {
@@ -315,12 +342,12 @@ export function renderArticlePage(template, { content, article, baseUrl, nonce, 
   });
   html = replaceText(html, /(<a\s+class="article-back dynamic-text"[^>]*data-article-back>)[\s\S]*?(<\/a>)/, `$1← Back to ${escapeHtml(content.pages.journal.title)}$2`);
   html = replaceText(html, /(<h1\s+data-article-title>)[\s\S]*?(<\/h1>)/, `$1${escapeHtml(article.title)}$2`);
-  html = replaceText(html, /(<p\s+class="article-publication-date"\s+data-article-date>)[\s\S]*?(<\/p>)/, `$1${escapeHtml(readableDate(article.revisedAt || article.publishedAt))}$2`);
+  html = replaceText(html, /(<p\s+class="article-publication-date"\s+data-article-date>)[\s\S]*?(<\/p>)/, `$1${escapeHtml(publicationDateMarkup(article))}$2`);
   const documentHtml = article.format === "markdown"
     ? article.bodyHtml || ""
     : `<p class="pdf-loading"><a href="${escapeHtml(article.pdfUrl)}">Open the source PDF</a>.</p>`;
   html = html.replace("<!-- ssr:article-document -->", documentHtml);
-  html = html.replace("<!-- ssr:article-abstract -->", articleAbstractMarkup(article));
+  html = html.replace("<!-- ssr:article-abstract -->", articleDerivedMarkup(article));
   if (article.format === "markdown") html = html.replace('class="article-document"', 'class="article-document article-markdown"');
   return html;
 }
@@ -339,10 +366,13 @@ export function sitemapArticleShards(articles) {
   return shards;
 }
 
-export function buildSitemapIndex(baseUrl, articles, lastModified) {
+export function buildSitemapIndex(baseUrl, articles, lastModified, articleCatalogModified = lastModified) {
   const entries = [{ location: "/sitemaps/pages-0001.xml", lastModified }];
   for (const [number, shard] of sitemapArticleShards(articles)) {
-    const modified = shard.map((article) => article.revisedAt || article.publishedAt).filter(Boolean).sort().at(-1) || lastModified;
+    const modified = [
+      articleCatalogModified,
+      ...shard.map((article) => article.revisedAt || article.publishedAt),
+    ].filter(Boolean).sort().at(-1) || lastModified;
     entries.push({ location: `/sitemaps/articles-${String(number).padStart(4, "0")}.xml`, lastModified: modified });
   }
   return xmlDocument(`<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries.map((entry) => (
@@ -368,7 +398,7 @@ export function buildArticlesSitemap(baseUrl, articles, shardNumber) {
 }
 
 export function buildRobots(baseUrl) {
-  const lines = [];
+  const lines = [`# Laboratory bot policy ${BOT_POLICY_VERSION}`, ""];
   for (const policy of BOT_POLICY_REGISTRY) {
     lines.push(`User-agent: ${policy.agent}`);
     if (policy.allowPublic) {

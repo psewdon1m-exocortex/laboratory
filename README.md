@@ -143,6 +143,14 @@ updated when an article is added:
 - `/mcp`, a stateless public MCP Streamable HTTP endpoint;
 - the compatible `/api/public/v1/*` endpoints for existing consumers.
 
+Publication, revision, canonical, visibility, deletion, derived-content and
+site-profile changes append a monotonic `public_content_events` record in the
+same database transaction. HTML and discovery routes use that journal for
+freshness validators and require intermediary revalidation. Uploaded Markdown
+headings are nested beneath the single server-rendered page H1. For PDF
+articles, the validated transcript is available to ordinary users in the
+collapsed `Text version` section as well as through the retrieval APIs.
+
 The Evidence API is intentionally read-only. Public evidence is materialized in
 SQLite and searched through FTS5 rather than by rescanning every article. It
 exposes canonical source URLs, stable revision-aware locators, normalized text

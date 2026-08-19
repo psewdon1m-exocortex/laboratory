@@ -17,6 +17,8 @@ const DEFAULT_SETTINGS = {
   noiseGrain: "55",
 };
 
+export const DATABASE_SCHEMA_VERSION = 4;
+
 export const UPLOAD_SLOTS = {
   heroImage: { kind: "image", maxBytes: 25 * 1024 * 1024 },
   aboutImage: { kind: "image", maxBytes: 25 * 1024 * 1024 },
@@ -165,6 +167,17 @@ export class LaboratoryStore {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS public_content_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_type TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        entity_id TEXT,
+        slug TEXT,
+        previous_slug TEXT,
+        occurred_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_public_content_events_scope
+      ON public_content_events(scope, entity_id, id DESC);
       CREATE TABLE IF NOT EXISTS assets (
         slot TEXT PRIMARY KEY,
         filename TEXT NOT NULL,
@@ -193,8 +206,18 @@ export class LaboratoryStore {
     this.seedSettings();
     await this.seedAssets();
     await this.seedArticles();
-    this.library = new ArticleLibrary({ db: this.db, uploadsDir: this.uploadsDir, config: this.config });
+    this.library = new ArticleLibrary({
+      db: this.db,
+      uploadsDir: this.uploadsDir,
+      config: this.config,
+      recordContentEvent: (event) => this.recordContentEvent(event),
+    });
     await this.library.initialize();
+    const hasScope = this.db.prepare("SELECT 1 FROM public_content_events WHERE scope = ? LIMIT 1");
+    for (const scope of ["site", "home", "about", "journal"]) {
+      if (!hasScope.get(scope)) this.recordContentEvent({ eventType: "Baseline", scope });
+    }
+    this.db.exec(`PRAGMA user_version = ${DATABASE_SCHEMA_VERSION}`);
     this.db.exec("PRAGMA optimize");
   }
 
@@ -256,13 +279,39 @@ export class LaboratoryStore {
     const content = normalizeSettings(this.db.prepare("SELECT key, value FROM settings").all());
     const assets = {};
     for (const row of this.db.prepare("SELECT * FROM assets").all()) assets[row.slot] = publicAssetUrl(row.slot, row.filename);
-    return { ...content, publicAssets: assets, updatedAt: this.latestUpdate() };
+    return { ...content, publicAssets: assets, updatedAt: this.contentModifiedAt(["site", "home"]) };
   }
 
-  latestUpdate() {
-    const asset = this.db.prepare("SELECT MAX(updated_at) AS value FROM assets").get().value;
-    const article = this.db.prepare("SELECT MAX(updated_at) AS value FROM library_articles").get().value;
-    return [asset, article].filter(Boolean).sort().at(-1) ?? null;
+  recordContentEvent({ eventType, scope, entityId = null, slug = null, previousSlug = null, occurredAt = null }) {
+    const latest = this.db.prepare(
+      "SELECT occurred_at AS occurredAt FROM public_content_events WHERE scope = ? ORDER BY id DESC LIMIT 1",
+    ).get(String(scope))?.occurredAt;
+    const requested = occurredAt ? new Date(occurredAt) : new Date();
+    if (!Number.isFinite(requested.getTime())) throw new Error("Public content event timestamp is invalid");
+    const latestTime = latest ? new Date(latest).getTime() : 0;
+    const eventTime = new Date(Math.max(requested.getTime(), latestTime + 1_000)).toISOString();
+    this.db.prepare(`
+      INSERT INTO public_content_events(event_type, scope, entity_id, slug, previous_slug, occurred_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(String(eventType), String(scope), entityId, slug, previousSlug, eventTime);
+    return eventTime;
+  }
+
+  contentModifiedAt(scopes = [], entityId = null) {
+    const values = [...new Set(scopes.map(String).filter(Boolean))];
+    if (!values.length) return null;
+    const placeholders = values.map(() => "?").join(", ");
+    const entityFilter = entityId == null ? "" : " AND (entity_id IS NULL OR entity_id = ?)";
+    const row = this.db.prepare(`
+      SELECT occurred_at AS occurredAt FROM public_content_events
+      WHERE scope IN (${placeholders})${entityFilter}
+      ORDER BY occurred_at DESC, id DESC LIMIT 1
+    `).get(...values, ...(entityId == null ? [] : [String(entityId)]));
+    return row?.occurredAt || null;
+  }
+
+  publicContentModifiedAt() {
+    return this.db.prepare("SELECT occurred_at AS occurredAt FROM public_content_events ORDER BY occurred_at DESC, id DESC LIMIT 1").get()?.occurredAt || null;
   }
 
   updateContent(input) {
@@ -271,6 +320,7 @@ export class LaboratoryStore {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       for (const [key, value] of Object.entries(values)) statement.run(key, value);
+      this.recordContentEvent({ eventType: "SiteUpdated", scope: "site" });
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -293,12 +343,21 @@ export class LaboratoryStore {
     const destination = path.join(this.uploadsDir, slot, filename);
     const previous = this.db.prepare("SELECT filename FROM assets WHERE slot = ?").get(slot)?.filename;
     await atomicWrite(destination, file.buffer);
-    this.db.prepare(`
-      INSERT INTO assets(slot, filename, original_name, mime, size, sha256, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(slot) DO UPDATE SET filename = excluded.filename, original_name = excluded.original_name,
-        mime = excluded.mime, size = excluded.size, sha256 = excluded.sha256, updated_at = excluded.updated_at
-    `).run(slot, filename, path.basename(file.originalname || filename), mime, file.buffer.length, sha256(file.buffer), new Date().toISOString());
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare(`
+        INSERT INTO assets(slot, filename, original_name, mime, size, sha256, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(slot) DO UPDATE SET filename = excluded.filename, original_name = excluded.original_name,
+          mime = excluded.mime, size = excluded.size, sha256 = excluded.sha256, updated_at = excluded.updated_at
+      `).run(slot, filename, path.basename(file.originalname || filename), mime, file.buffer.length, sha256(file.buffer), new Date().toISOString());
+      const scope = slot === "heroImage" ? "home" : slot.startsWith("about") ? "about" : "journal";
+      this.recordContentEvent({ eventType: "PageAssetUpdated", scope });
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
     if (previous && previous !== filename) await fs.rm(path.join(this.uploadsDir, slot, previous), { force: true });
     return this.getContent();
   }
@@ -316,7 +375,16 @@ export class LaboratoryStore {
   async removeAsset(slot) {
     if (!UPLOAD_SLOTS[slot]) throw new Error("Unknown upload slot");
     const previous = this.db.prepare("SELECT filename FROM assets WHERE slot = ?").get(slot)?.filename;
-    this.db.prepare("DELETE FROM assets WHERE slot = ?").run(slot);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("DELETE FROM assets WHERE slot = ?").run(slot);
+      const scope = slot === "heroImage" ? "home" : slot.startsWith("about") ? "about" : "journal";
+      this.recordContentEvent({ eventType: "PageAssetRemoved", scope });
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
     if (previous) await fs.rm(path.join(this.uploadsDir, slot, previous), { force: true });
     return this.getContent();
   }
@@ -327,6 +395,7 @@ export class LaboratoryStore {
       exportedAt: new Date().toISOString(),
       settings: this.db.prepare("SELECT key, value FROM settings ORDER BY key").all(),
       assets: this.db.prepare("SELECT * FROM assets ORDER BY slot").all(),
+      contentEvents: this.db.prepare("SELECT * FROM public_content_events ORDER BY id").all(),
       library: this.library.exportSnapshot(),
       notifications: this.exportNotificationSnapshot(),
     };
@@ -445,25 +514,36 @@ export class LaboratoryStore {
         oldTreeMoved = true;
         await fs.rename(stagedUploads, this.uploadsDir);
         newTreeMoved = true;
-        this.db.exec("DELETE FROM settings; DELETE FROM assets;");
-      const settingInsert = this.db.prepare("INSERT INTO settings(key, value) VALUES (?, ?)");
-      for (const item of snapshot.settings) settingInsert.run(item.key, item.value);
-      const assetInsert = this.db.prepare("INSERT INTO assets(slot, filename, original_name, mime, size, sha256, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
-      for (const item of snapshot.assets) assetInsert.run(item.slot, item.filename, item.original_name, item.mime, item.size, item.sha256, item.updated_at);
-      if (snapshot.schema === "exocortex.laboratory.backup.v1") {
-        this.db.exec("DELETE FROM article_slug_aliases; DELETE FROM article_files; DELETE FROM article_revisions; DELETE FROM library_articles; DELETE FROM articles;");
-        const articleInsert = this.db.prepare(`
-          INSERT INTO articles(id, slug, title, published_at, status, pdf_filename, original_name, pdf_size, pdf_sha256, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        this.db.exec("DELETE FROM settings; DELETE FROM assets; DELETE FROM public_content_events;");
+        const settingInsert = this.db.prepare("INSERT INTO settings(key, value) VALUES (?, ?)");
+        for (const item of snapshot.settings) settingInsert.run(item.key, item.value);
+        const assetInsert = this.db.prepare("INSERT INTO assets(slot, filename, original_name, mime, size, sha256, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
+        for (const item of snapshot.assets) assetInsert.run(item.slot, item.filename, item.original_name, item.mime, item.size, item.sha256, item.updated_at);
+        const eventInsert = this.db.prepare(`
+          INSERT INTO public_content_events(id, event_type, scope, entity_id, slug, previous_slug, occurred_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
         `);
-        for (const item of snapshot.articles) articleInsert.run(item.id, item.slug, item.title, item.published_at, item.status, item.pdf_filename, item.original_name, item.pdf_size, item.pdf_sha256, item.created_at, item.updated_at);
-        this.db.prepare("DELETE FROM sqlite_sequence WHERE name = 'articles'").run();
-        const maximumArticleId = this.db.prepare("SELECT COALESCE(MAX(id), 0) AS value FROM articles").get().value;
-        if (maximumArticleId) this.db.prepare("INSERT INTO sqlite_sequence(name, seq) VALUES ('articles', ?)").run(maximumArticleId);
-      } else {
-        this.library.restoreDatabase(snapshot.library);
-      }
+        for (const item of snapshot.contentEvents || []) eventInsert.run(
+          item.id, item.event_type, item.scope, item.entity_id, item.slug, item.previous_slug, item.occurred_at,
+        );
+        if (snapshot.schema === "exocortex.laboratory.backup.v1") {
+          this.db.exec("DELETE FROM article_slug_aliases; DELETE FROM article_files; DELETE FROM article_revisions; DELETE FROM library_articles; DELETE FROM articles;");
+          const articleInsert = this.db.prepare(`
+            INSERT INTO articles(id, slug, title, published_at, status, pdf_filename, original_name, pdf_size, pdf_sha256, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `);
+          for (const item of snapshot.articles) articleInsert.run(item.id, item.slug, item.title, item.published_at, item.status, item.pdf_filename, item.original_name, item.pdf_size, item.pdf_sha256, item.created_at, item.updated_at);
+          this.db.prepare("DELETE FROM sqlite_sequence WHERE name = 'articles'").run();
+          const maximumArticleId = this.db.prepare("SELECT COALESCE(MAX(id), 0) AS value FROM articles").get().value;
+          if (maximumArticleId) this.db.prepare("INSERT INTO sqlite_sequence(name, seq) VALUES ('articles', ?)").run(maximumArticleId);
+        } else {
+          this.library.restoreDatabase(snapshot.library);
+        }
         this.restoreNotificationDatabase(snapshot);
+        const restoredScope = this.db.prepare("SELECT 1 FROM public_content_events WHERE scope = ? LIMIT 1");
+        for (const scope of ["site", "home", "about", "journal"]) {
+          if (!restoredScope.get(scope)) this.recordContentEvent({ eventType: "RestoreCompleted", scope });
+        }
         const foreignKeyFailures = this.db.prepare("PRAGMA foreign_key_check").all();
         if (foreignKeyFailures.length) throw new Error("Restored database violates foreign-key invariants");
         this.db.exec("COMMIT");

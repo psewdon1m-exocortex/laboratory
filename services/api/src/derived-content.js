@@ -442,6 +442,13 @@ export class DerivedContentRuntime {
       `).run(job.revision_id, generationKey, job.source_sha256, this.config.geminiModel, PROMPT_VERSION,
         JSON.stringify(manifest), relativeRoot, generatedAt);
       this.db.prepare("UPDATE article_generation_jobs SET status = 'complete', last_error = NULL, updated_at = ? WHERE revision_id = ?").run(generatedAt, job.revision_id);
+      this.library.recordContentEvent({
+        eventType: "DerivedContentUpdated",
+        scope: "journal",
+        entityId: job.internal_id,
+        slug: job.slug,
+        occurredAt: generatedAt,
+      });
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");

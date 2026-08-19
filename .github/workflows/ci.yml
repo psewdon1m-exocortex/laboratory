@@ -47,6 +47,7 @@ jobs:
             IMAGE_DIGEST="sha256:$(printf 'a%.0s' {1..64})" \
             bash scripts/build-release.sh 0.0.0-ci release-artifacts-ci
           node scripts/verify-release.mjs release-artifacts-ci/laboratory-release.json
+          node -e "const manifest=require('./release-artifacts-ci/laboratory-release.json'); if(manifest.database_schema!==4) process.exit(1)"
           (cd release-artifacts-ci && sha256sum -c laboratory-0.0.0-ci-compose.tar.gz.sha256)
 
       - name: Validate production Compose
@@ -97,6 +98,9 @@ jobs:
             sleep 2
           done
           curl -fsS "http://127.0.0.1:$port/api/health" | grep -q '"status":"ok"'
-          curl -fsS "http://127.0.0.1:$port/about" | grep -q '<main'
-          curl -fsS "http://127.0.0.1:$port/robots.txt" | grep -q 'User-agent: Google-Extended'
+          about_html="$(curl -fsS "http://127.0.0.1:$port/about")"
+          grep -q '<main' <<<"$about_html"
+          test "$(grep -Eo '<h1([[:space:]>])' <<<"$about_html" | wc -l | tr -d ' ')" -eq 1
+          curl -fsS "http://127.0.0.1:$port/robots.txt" | grep -q 'Laboratory bot policy'
+          curl -fsS "http://127.0.0.1:$port/sitemap-index.xml" | grep -q 'sitemaps/articles-0001.xml'
           test "$(docker inspect --format '{{.Config.User}}' "$name")" = node

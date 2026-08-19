@@ -192,7 +192,10 @@ export function publicApiOpenApi(baseUrl) {
 }
 
 export function registerPublicApi(app, { catalog, evidenceIndex, baseUrl }) {
-  const cache = (res, seconds = 300) => res.setHeader("Cache-Control", `public, max-age=${seconds}, stale-while-revalidate=${seconds * 6}`);
+  const cache = (res, seconds = 0) => res.setHeader(
+    "Cache-Control",
+    seconds > 0 ? `public, max-age=${seconds}, stale-while-revalidate=${seconds * 6}` : "public, max-age=0, must-revalidate",
+  );
   const links = (req, res) => res.setHeader("Link", apiLinks(baseUrl(req)));
   const validateCommonFilters = (req) => {
     if (req.query.format && !["markdown", "pdf"].includes(String(req.query.format))) {
@@ -244,7 +247,7 @@ export function registerPublicApi(app, { catalog, evidenceIndex, baseUrl }) {
       if (req.query.mode && !["all", "any"].includes(String(req.query.mode))) {
         const error = new Error("mode must be all or any"); error.status = 400; throw error;
       }
-      cache(res, 120); links(req, res);
+      cache(res); links(req, res);
       const result = evidenceIndex.search({
         query: req.query.q, mode: req.query.mode, limit: req.query.limit, cursor: req.query.cursor,
         format: req.query.format, updatedAfter: req.query.updated_after, baseUrl: baseUrl(req),

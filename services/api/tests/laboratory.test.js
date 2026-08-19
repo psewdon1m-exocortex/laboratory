@@ -16,14 +16,18 @@ import { loadConfig } from "../src/config.js";
 import { DerivedContentRuntime, verifyEvidence } from "../src/derived-content.js";
 import { applyLaboratoryRegister, verifySnapshot } from "../src/kernel-register.js";
 import { createLaboratoryApp } from "../src/server.js";
-import { evidenceTextHash, renderArticlePage } from "../src/seo.js";
+import { BOT_POLICY_VERSION, PAGE_TYPE_REGISTRY, evidenceTextHash, renderArticlePage } from "../src/seo.js";
 import { SearchNotificationRuntime } from "../src/search-notifications.js";
-import { LaboratoryStore, validateUpload } from "../src/storage.js";
+import { DATABASE_SCHEMA_VERSION, LaboratoryStore, validateUpload } from "../src/storage.js";
 import { UpdaterClient } from "../src/updater.js";
 import { GitHubArticleLibrary, articleLocation, repositoryCoordinates } from "../src/github-library.js";
 import { placeholderNodeDefinitions } from "../../web/open-node-placeholders.js";
 
 const defaultsDir = fileURLToPath(new URL("../../../data/defaults/", import.meta.url));
+
+function matchCount(value, pattern) {
+  return [...String(value).matchAll(pattern)].length;
+}
 
 function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -70,6 +74,18 @@ test("Laboratory resolves custom Open Node types as decorative read-only nodes",
   assert.equal(definitions[0].outputs[0].id, "idea");
   assert.deepEqual(definitions[0].createDefaultParams(), { note: "Collect source material" });
   assert.deepEqual(await definitions[0].execute(), { outputs: {} });
+});
+
+test("SEO page and bot registries define complete, versioned lifecycle contracts", () => {
+  assert.match(BOT_POLICY_VERSION, /^\d{4}-\d{2}-\d{2}\.\d+$/);
+  assert.deepEqual(PAGE_TYPE_REGISTRY.map((page) => page.id), ["home", "about", "journal", "article", "private", "not_found"]);
+  for (const page of PAGE_TYPE_REGISTRY) {
+    for (const field of ["route", "status", "rendering", "indexing", "canonical", "sitemap", "schema"]) {
+      assert.ok(Object.hasOwn(page, field), `${page.id} is missing ${field}`);
+    }
+  }
+  assert.equal(PAGE_TYPE_REGISTRY.find((page) => page.id === "article").indexing, "by_content_state");
+  assert.equal(PAGE_TYPE_REGISTRY.find((page) => page.id === "private").authentication, "required");
 });
 
 test("audit log is structured, pseudonymizes network data and never records request bodies", async (context) => {
@@ -206,6 +222,7 @@ test("local Gemini key file overrides Registry only outside production", async (
 test("SQLite content model seeds English pages and searchable articles", async (context) => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "laboratory-store-"));
   const store = await LaboratoryStore.open({ dataDir, defaultsDir });
+  assert.equal(store.db.prepare("PRAGMA user_version").get().user_version, DATABASE_SCHEMA_VERSION);
   context.after(async () => {
     store.close();
     await fs.rm(dataDir, { recursive: true, force: true });
@@ -336,7 +353,7 @@ test("ZIP publication assigns stable IDs, renders directives and hides unpublish
   const publicArticle = store.getArticle(first.article.slug);
   assert.match(publicArticle.bodyHtml, /article-gallery/);
   assert.equal(publicArticle.metadata.sources[0].url, "https://example.com/source");
-  assert.match(publicArticle.bodyHtml, /<h1 id="a-rendered-note">/);
+  assert.match(publicArticle.bodyHtml, /<h2 id="a-rendered-note">/);
   assert.match(publicArticle.bodyHtml, /attachments%2F|attachments\//);
   assert.doesNotMatch(publicArticle.bodyHtml, /<script/i);
   assert.equal(publicArticle.revisedAt, null);
@@ -427,12 +444,15 @@ test("v2 backups restore article identities, revisions and files", async (contex
     status: "published",
   });
   const backup = parseBackup(await createBackup(source, "0.1.0-test"));
+  assert.ok(backup.snapshot.contentEvents.length >= 1);
+  const sourceFreshness = source.publicContentModifiedAt();
   const restored = await restore.restoreSnapshot(backup.snapshot, backup.files);
   assert.equal(restored.articles, 4);
   const article = restore.getArticle(publication.article.slug);
   assert.equal(article.internalId, publication.article.internalId);
   assert.match(article.bodyHtml, /Preserved revision/);
   assert.equal(restore.library.getAdminArticle(article.internalId).revisions.length, 1);
+  assert.equal(restore.publicContentModifiedAt(), sourceFreshness);
 });
 
 test("derived generations use immutable versioned URLs and requeue stale prompt versions", async (context) => {
@@ -501,6 +521,21 @@ test("derived generations use immutable versioned URLs and requeue stale prompt 
   assert.match(articlePage, /<details class="article-abstract"><summary>Abstract<\/summary>/);
   assert.match(articlePage, /compact abstract/);
   assert.doesNotMatch(articlePage, /<h1[^>]*>Abstract<\/h1>/i);
+  const pdfPage = renderArticlePage(articleTemplate, {
+    content: store.getContent(),
+    article: {
+      ...article,
+      format: "pdf",
+      pdfUrl: "/api/article-assets/test/article.pdf",
+      transcriptHtml: "<h2 id=\"generated-transcript\">Generated transcript</h2><p>Faithful visible PDF text.</p>",
+    },
+    baseUrl: "https://laboratory.example.com",
+    nonce: "test-nonce",
+    authorName: "c31e1b26",
+  });
+  assert.match(pdfPage, /<summary>Text version<\/summary>/);
+  assert.match(pdfPage, /Faithful visible PDF text/);
+  assert.equal(matchCount(pdfPage, /<h1\b/gi), 1);
   assert.equal(store.library.db.prepare("SELECT COUNT(*) AS count FROM article_derivative_generations").get().count, 1);
   const firstGenerationKey = article.derivedContent.generationKey;
   await runtime.persist(job, {
@@ -640,6 +675,7 @@ test("HTTP routes, clean article URLs and protected admin mutations work", async
   const aboutHtml = await (await fetch(`${baseUrl}/about`)).text();
   assert.match(aboutHtml, /Mara Ellison/);
   assert.match(aboutHtml, /data-about-title>about me<\/h1>/);
+  assert.equal(matchCount(aboutHtml, /<h1\b/gi), 1);
   assert.doesNotMatch(aboutHtml, /article count|publication statistics/i);
   assert.match(aboutHtml, /"@type":"Person"/);
   assert.match(aboutHtml, /property="og:url"/);
@@ -787,6 +823,7 @@ test("HTTP routes, clean article URLs and protected admin mutations work", async
   assert.equal(withoutCsrf.status, 403);
 
   const current = await (await fetch(`${baseUrl}/api/content`)).json();
+  const contentModifiedBefore = current.updatedAt;
   current.pages.about.title = "field profile";
   current.pages.journal.title = "field journal";
   const updated = await fetch(`${baseUrl}/api/admin/content`, {
@@ -802,6 +839,7 @@ test("HTTP routes, clean article URLs and protected admin mutations work", async
   const updatedContent = await updated.json();
   assert.equal(updatedContent.pages.about.title, "field profile");
   assert.equal(updatedContent.pages.journal.title, "field journal");
+  assert.notEqual(updatedContent.updatedAt, contentModifiedBefore);
   const renderedAbout = await (await fetch(`${baseUrl}/about`)).text();
   assert.match(renderedAbout, /data-about-title>field profile<\/h1>/);
 
@@ -821,7 +859,11 @@ test("HTTP routes, clean article URLs and protected admin mutations work", async
   assert.match(published.bodyHtml, /HTTP publication/);
   const publishedPage = await (await fetch(`${baseUrl}/journal/${importedBody.article.slug}`)).text();
   assert.match(publishedPage, /Created through the private API/);
-  assert.match(publishedPage, /<h1 id="http-publication">/);
+  assert.match(publishedPage, /<h2 id="http-publication">/);
+  assert.equal(matchCount(publishedPage, /<h1\b/gi), 1);
+  for (const resource of ["/journal", "/sitemaps/articles-0001.xml", "/llms.txt", "/feed.xml", "/journal.md"]) {
+    assert.match(await (await fetch(`${baseUrl}${resource}`)).text(), new RegExp(importedBody.article.slug));
+  }
   const evidence = await (await fetch(`${baseUrl}/api/public/v1/evidence?q=created`)).json();
   assert.ok(evidence.items.some((item) => item.articleId === importedBody.article.internalId));
   assert.ok(evidence.items.every((item) => item.verified === true && item.sourceTextHash?.startsWith("sha256:")));
@@ -832,10 +874,35 @@ test("HTTP routes, clean article URLs and protected admin mutations work", async
   const machineArticle = await (await fetch(`${baseUrl}/api/public/v1/articles/${importedBody.article.slug}`)).json();
   assert.equal(machineArticle.language, "en");
   assert.ok(machineArticle.evidence.length >= 1);
+  const pageBeforeRename = await fetch(`${baseUrl}/journal/${importedBody.article.slug}`);
+  const pageLastModified = pageBeforeRename.headers.get("last-modified");
+  const pageEtag = pageBeforeRename.headers.get("etag");
+  await pageBeforeRename.text();
+  const renamed = await fetch(`${baseUrl}/api/admin/articles/${importedBody.article.internalId}`, {
+    method: "PUT",
+    headers: { Cookie: cookie, "Content-Type": "application/json", "X-CSRF-Token": session.csrfToken },
+    body: JSON.stringify({ title: "HTTP Publication Renamed" }),
+  });
+  assert.equal(renamed.status, 200);
+  const renamedArticle = (await renamed.json()).article;
+  assert.ok(renamedArticle.revisedAt);
+  const conditionallyRefetched = await fetch(`${baseUrl}/journal/${importedBody.article.slug}`, {
+    headers: { "If-Modified-Since": pageLastModified },
+  });
+  assert.equal(conditionallyRefetched.status, 200);
+  assert.notEqual(conditionallyRefetched.headers.get("etag"), pageEtag);
+  const renamedHtml = await conditionallyRefetched.text();
+  assert.match(renamedHtml, /HTTP Publication Renamed/);
+  assert.match(renamedHtml, /revised/);
+  const renamedMachineArticle = await (await fetch(`${baseUrl}/api/public/v2/articles/${importedBody.article.internalId}`)).json();
+  assert.notEqual(renamedMachineArticle.contentModifiedAt, renamedMachineArticle.publishedAt);
   const adminDetail = await fetch(`${baseUrl}/api/admin/articles/${importedBody.article.internalId}`, { headers: { Cookie: cookie } });
   assert.equal(adminDetail.status, 200);
-  assert.equal((await adminDetail.json()).revisions.length, 1);
+  assert.equal((await adminDetail.json()).revisions.length, 2);
 
+  const sitemapBeforeDelete = await fetch(`${baseUrl}/sitemaps/articles-0001.xml`);
+  const sitemapLastModified = sitemapBeforeDelete.headers.get("last-modified");
+  await sitemapBeforeDelete.text();
   const deleted = await fetch(`${baseUrl}/api/admin/articles/${importedBody.article.internalId}`, {
     method: "DELETE",
     headers: { Cookie: cookie, "X-CSRF-Token": session.csrfToken },
@@ -843,6 +910,16 @@ test("HTTP routes, clean article URLs and protected admin mutations work", async
   assert.equal(deleted.status, 200);
   assert.equal((await deleted.json()).deleted.internalId, importedBody.article.internalId);
   assert.equal((await fetch(`${baseUrl}/api/articles/${importedBody.article.slug}`)).status, 404);
+  const sitemapAfterDelete = await fetch(`${baseUrl}/sitemaps/articles-0001.xml`, {
+    headers: { "If-Modified-Since": sitemapLastModified },
+  });
+  assert.equal(sitemapAfterDelete.status, 200);
+  assert.doesNotMatch(await sitemapAfterDelete.text(), new RegExp(importedBody.article.slug));
+  for (const resource of ["/journal", "/llms.txt", "/feed.xml", "/journal.md"]) {
+    assert.doesNotMatch(await (await fetch(`${baseUrl}${resource}`)).text(), new RegExp(importedBody.article.slug));
+  }
+  const evidenceAfterDelete = await (await fetch(`${baseUrl}/api/public/v2/evidence?q=created`)).json();
+  assert.ok(!evidenceAfterDelete.articles.some((article) => article.id === importedBody.article.internalId));
   const gonePage = await fetch(`${baseUrl}/journal/${importedBody.article.slug}`);
   assert.equal(gonePage.status, 410);
   assert.match(gonePage.headers.get("x-robots-tag"), /noindex/);
