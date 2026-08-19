@@ -37,6 +37,7 @@ jobs:
           set -euo pipefail
           find services/api/src services/api/tests scripts -type f \( -name '*.js' -o -name '*.mjs' \) -print0 \
             | xargs -0 -n1 node --check
+          node scripts/verify-vendored-assets.mjs
           sh -n install.sh
           sh -n scripts/bootstrap.sh
           bash -n scripts/build-release.sh

@@ -121,6 +121,9 @@ plugin loading are not exposed.
 The browser bundle is committed under `services/web/static/vendor`; after an
 Open Node upgrade, install its workspace dependencies and run
 `node scripts/build-open-node-viewer.mjs` from the Laboratory root.
+The build records the exact Kernel commit and SHA-256 values in
+`open-node-viewer.manifest.json`; CI verifies that manifest without requiring a
+mutable sibling checkout.
 
 ## Search, GEO and derived content
 

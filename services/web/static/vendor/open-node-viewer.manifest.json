@@ -1,0 +1,14 @@
+{
+  "schema": "laboratory.vendored-asset.v1",
+  "name": "open-node-viewer",
+  "version": "0.1.0",
+  "source": {
+    "repository": "https://github.com/psewdon1m-exocortex/kernel.git",
+    "commit": "744977885034c27e5a62aa7f80e207f162e1c9f6",
+    "path": "vendor/open-node"
+  },
+  "files": {
+    "open-node-viewer.js": "sha256:7b82f504db38873d7d1e09ee3d5aa3d24e2c5273c38ad8da98c7a2d3f3de2833",
+    "open-node-viewer.css": "sha256:17a217c3eb173d40f43e0e02e373b95e585038981876f95391c4bed425c81d10"
+  }
+}

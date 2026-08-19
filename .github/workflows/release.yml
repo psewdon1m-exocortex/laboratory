@@ -47,6 +47,9 @@ jobs:
           npm test
           npm audit --omit=dev --audit-level=high
 
+      - name: Verify vendored runtime assets
+        run: node scripts/verify-vendored-assets.mjs
+
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io

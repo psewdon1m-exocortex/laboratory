@@ -7,7 +7,6 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { strToU8, unzipSync, zipSync } from "fflate";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import { NodeRegistry } from "../../../../kernel/vendor/open-node/packages/sdk/dist/index.js";
 
 import { ARTICLE_ID_PATTERN, parseArticleArchive } from "../src/article-archive.js";
 import { AuditLog } from "../src/audit-log.js";
@@ -52,7 +51,7 @@ function articleZip(markdown, extra = {}, id = "") {
   }, { level: 6 }));
 }
 
-test("Laboratory resolves custom Open Node types as decorative read-only nodes", () => {
+test("Laboratory resolves custom Open Node types as decorative read-only nodes", async () => {
   const project = {
     nodes: [{
       id: "node-observation",
@@ -64,11 +63,13 @@ test("Laboratory resolves custom Open Node types as decorative read-only nodes",
       ports: [{ id: "idea", label: "Idea", direction: "output", kind: "data", typeId: "core.string", dynamic: true }],
     }],
   };
-  const registry = new NodeRegistry();
-  for (const definition of placeholderNodeDefinitions(project)) registry.register(definition);
-  const resolved = registry.migrate(project.nodes[0]);
-  assert.equal(resolved.unresolved, undefined);
-  assert.equal(registry.get("laboratory.note.observation", "1.0.0").outputs[0].id, "idea");
+  const definitions = placeholderNodeDefinitions(project);
+  assert.equal(definitions.length, 1);
+  assert.equal(definitions[0].typeId, "laboratory.note.observation");
+  assert.equal(definitions[0].version, "1.0.0");
+  assert.equal(definitions[0].outputs[0].id, "idea");
+  assert.deepEqual(definitions[0].createDefaultParams(), { note: "Collect source material" });
+  assert.deepEqual(await definitions[0].execute(), { outputs: {} });
 });
 
 test("audit log is structured, pseudonymizes network data and never records request bodies", async (context) => {
