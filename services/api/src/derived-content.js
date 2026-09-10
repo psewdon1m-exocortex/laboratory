@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -187,19 +186,8 @@ export class DerivedContentRuntime {
         ? key
         : "";
     };
-    let localError = "";
-    if (this.config.environment !== "production" && this.config.geminiApiKeyFile) {
-      try {
-        const value = readFileSync(this.config.geminiApiKeyFile, "utf8");
-        const key = usable(value);
-        if (key) return { key, source: "local-file", error: "" };
-        if (value.trim()) localError = "Local Gemini API key file contains a placeholder or invalid key";
-      } catch (error) {
-        if (error?.code !== "ENOENT") localError = `Cannot read local Gemini API key file: ${error.message}`;
-      }
-    }
     const key = usable(this.register?.state?.geminiApiKey);
-    return { key, source: key ? "kernel-register" : "none", error: localError };
+    return { key, source: key ? "volt" : "none", error: this.register?.error ?? "" };
   }
 
   apiKey() {

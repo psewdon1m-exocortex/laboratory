@@ -1,6 +1,7 @@
 name: Laboratory CI
 
 on:
+  workflow_call:
   pull_request:
   push:
     branches: [main]
@@ -42,12 +43,20 @@ jobs:
           sh -n scripts/bootstrap.sh
           bash -n scripts/build-release.sh
           rm -rf release-artifacts-ci
+          updater_bundle="$RUNNER_TEMP/laboratory-ci-updater/updater"
+          mkdir -p "$updater_bundle/systemd"
+          install -m 0755 /dev/null "$updater_bundle/install.sh"
+          install -m 0755 /dev/null "$updater_bundle/updater-linux-amd64"
+          install -m 0644 /dev/null "$updater_bundle/systemd/updater.service"
+          updater_version="$(tr -d '[:space:]' < .release/updater.version)"
           GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
             IMAGE_REFERENCE="ghcr.io/${GITHUB_REPOSITORY,,}" \
             IMAGE_DIGEST="sha256:$(printf 'a%.0s' {1..64})" \
+            UPDATER_BUNDLE_DIR="$updater_bundle" \
+            UPDATER_BUNDLE_VERSION="$updater_version" \
             bash scripts/build-release.sh 0.0.0-ci release-artifacts-ci
           node scripts/verify-release.mjs release-artifacts-ci/laboratory-release.json
-          node -e "const manifest=require('./release-artifacts-ci/laboratory-release.json'); if(manifest.database_schema!==4) process.exit(1)"
+          node -e "const manifest=require('./release-artifacts-ci/laboratory-release.json'); if(manifest.database_schema!==6) process.exit(1)"
           (cd release-artifacts-ci && sha256sum -c laboratory-0.0.0-ci-compose.tar.gz.sha256)
 
       - name: Validate production Compose
@@ -63,6 +72,7 @@ jobs:
             -e 's|^LABORATORY_SESSION_SECRET=.*|LABORATORY_SESSION_SECRET=ci-session-secret-with-at-least-32-characters|' \
             -e 's|^LABORATORY_CONTENT_GITHUB_TOKEN=.*|LABORATORY_CONTENT_GITHUB_TOKEN=ci-github-token|' \
             -e 's|^LABORATORY_CONTENT_WEBHOOK_SECRET=.*|LABORATORY_CONTENT_WEBHOOK_SECRET=ci-webhook-secret|' \
+            -e 's|^LABORATORY_SATURN_CLIENT_TOKEN=.*|LABORATORY_SATURN_CLIENT_TOKEN=ci-saturn-client-token|' \
             -e 's|^UPDATER_SOCKET_GID=.*|UPDATER_SOCKET_GID=0|' \
             -e 's|^UPDATER_CONTROL_TOKEN=.*|UPDATER_CONTROL_TOKEN=ci-updater-control-token-32-characters|' \
             .ci.env
@@ -104,3 +114,29 @@ jobs:
           curl -fsS "http://127.0.0.1:$port/robots.txt" | grep -q 'Laboratory bot policy'
           curl -fsS "http://127.0.0.1:$port/sitemap-index.xml" | grep -q 'sitemaps/articles-0001.xml'
           test "$(docker inspect --format '{{.Config.User}}' "$name")" = node
+
+  pre-push-gate:
+    name: Pre-push gate
+    needs: verify
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - name: Validate seven mandatory areas
+        env:
+          GATE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: >-
+          python3 scripts/pre-push-gate.py
+          --upstream-result "${{ needs.verify.result }}"
+          --report .pre-push-gate-report.json
+      - name: Preserve gate report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: laboratory-pre-push-gate-${{ github.sha }}
+          path: .pre-push-gate-report.json
+          if-no-files-found: error
+          retention-days: 14

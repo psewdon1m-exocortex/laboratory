@@ -4,6 +4,21 @@ import path from "node:path";
 
 const SCHEMA = "exocortex.register.snapshot.v1";
 const REVISION_PATTERN = /^register-[A-Za-z0-9-]+$/;
+const VOLT_REFERENCE = /^volt:\/\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const GEMINI_KEY = "services.laboratory.ai.gemini_api_key";
+const LABORATORY_KEYS = [
+  "repositories.laboratory.url",
+  "repositories.neptune.url",
+  "repositories.laboratory.content.url",
+  "repositories.laboratory.content.branch",
+  "services.laboratory.url",
+  "services.laboratory.sni",
+  "services.laboratory.port",
+  "services.saturn.sni",
+  "services.saturn.port",
+  "intervals.kernel.refresh_sec",
+  GEMINI_KEY,
+];
 
 function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -39,16 +54,22 @@ export function applyLaboratoryRegister(config, snapshot) {
   const values = snapshot?.values;
   if (!values) return {
     repositoryUrl: config.repositoryUrl,
+    neptuneRepositoryUrl: "",
     contentRepositoryUrl: "",
     contentRepositoryBranch: "",
     publicUrl: config.publicUrl,
+    saturnUrl: config.saturnUrl,
     geminiApiKey: "",
+    geminiSecretRef: "",
     refreshSeconds: config.kernelRefreshSeconds,
     revision: "",
   };
   const repositoryUrl = resolve(values, "repositories.laboratory.url")
     ? httpsUrl(resolve(values, "repositories.laboratory.url"), "repositories.laboratory.url")
     : config.repositoryUrl;
+  const neptuneRepositoryUrl = resolve(values, "repositories.neptune.url")
+    ? httpsUrl(resolve(values, "repositories.neptune.url"), "repositories.neptune.url")
+    : "";
   const contentRepositoryUrl = resolve(values, "repositories.laboratory.content.url")
     ? httpsUrl(resolve(values, "repositories.laboratory.content.url"), "repositories.laboratory.content.url")
     : "";
@@ -68,12 +89,31 @@ export function applyLaboratoryRegister(config, snapshot) {
       publicUrl = `https://${sni}${port === 443 ? "" : `:${port}`}`;
     }
   }
+  let saturnUrl = config.saturnUrl;
+  const saturnSni = String(resolve(values, "services.saturn.sni") ?? "").trim();
+  if (saturnSni) {
+    if (!/^[A-Za-z0-9.-]+$/.test(saturnSni)) throw new Error("services.saturn.sni must contain only a hostname");
+    const saturnPort = Number.parseInt(resolve(values, "services.saturn.port") ?? "443", 10);
+    if (!Number.isInteger(saturnPort) || saturnPort < 1 || saturnPort > 65535) throw new Error("services.saturn.port is invalid");
+    saturnUrl = `https://${saturnSni}${saturnPort === 443 ? "" : `:${saturnPort}`}`;
+  }
   const sharedRefresh = Number.parseInt(resolve(values, "intervals.kernel.refresh_sec"), 10);
   const refreshSeconds = Number.isInteger(sharedRefresh) && sharedRefresh >= 5 && sharedRefresh <= 3600
     ? sharedRefresh
     : config.kernelRefreshSeconds;
-  const geminiApiKey = String(resolve(values, "services.laboratory.ai.gemini_api_key") ?? "").trim();
-  return { repositoryUrl, contentRepositoryUrl, contentRepositoryBranch, publicUrl, geminiApiKey, refreshSeconds, revision: snapshot.revision };
+  const geminiApiKey = String(resolve(values, GEMINI_KEY) ?? "").trim();
+  return { repositoryUrl, neptuneRepositoryUrl, contentRepositoryUrl, contentRepositoryBranch, publicUrl, saturnUrl, geminiApiKey, geminiSecretRef: "", refreshSeconds, revision: snapshot.revision };
+}
+
+function withResolvedValues(snapshot, resolved) {
+  const values = structuredClone(snapshot.values);
+  for (const [key, item] of Object.entries(resolved)) {
+    const parts = key.split(".");
+    let cursor = values;
+    for (const part of parts.slice(0, -1)) cursor = cursor[part];
+    cursor[parts.at(-1)] = item.value;
+  }
+  return { ...snapshot, values };
 }
 
 async function readCache(cachePath) {
@@ -116,6 +156,32 @@ export async function loadKernelSnapshot(config) {
   }
 }
 
+export async function resolveKernelValues(config, keys, fetchImpl = globalThis.fetch) {
+  const response = await fetchImpl(`${config.kernelUrl.replace(/\/$/, "")}/api/v1/register/resolve`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.kernelServiceToken}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "User-Agent": `exocortex-laboratory/${config.version}`,
+    },
+    body: JSON.stringify({ keys }),
+    redirect: "manual",
+    signal: AbortSignal.timeout(config.kernelTimeoutMs),
+  });
+  if (!response.ok) throw new Error(`Kernel value resolution returned HTTP ${response.status}`);
+  const text = await response.text();
+  if (Buffer.byteLength(text) > 1024 * 1024) throw new Error("Kernel resolution response is too large");
+  const payload = JSON.parse(text);
+  if (payload?.schema !== "exocortex.register.resolution.v1" || !payload.values || typeof payload.values !== "object") {
+    throw new Error("Kernel returned an unsupported resolution response");
+  }
+  for (const key of keys) {
+    if (typeof payload.values[key]?.value !== "string") throw new Error("Kernel omitted a requested Register value");
+  }
+  return payload.values;
+}
+
 export class KernelRegisterRuntime {
   constructor(config) {
     this.config = config;
@@ -127,7 +193,20 @@ export class KernelRegisterRuntime {
   async refresh() {
     try {
       const snapshot = await loadKernelSnapshot(this.config);
-      this.state = applyLaboratoryRegister(this.config, snapshot);
+      let resolvedSnapshot = snapshot;
+      if (snapshot) {
+        const keys = LABORATORY_KEYS.filter((key) => resolve(snapshot.values, key) !== undefined);
+        for (const key of keys) {
+          if (!VOLT_REFERENCE.test(String(resolve(snapshot.values, key)))) {
+            throw new Error(`Kernel Register key ${key} must use volt://<entry-id>/<field-id>`);
+          }
+        }
+        resolvedSnapshot = keys.length
+          ? withResolvedValues(snapshot, await resolveKernelValues(this.config, keys))
+          : snapshot;
+      }
+      const next = applyLaboratoryRegister(this.config, resolvedSnapshot);
+      this.state = next;
       this.error = "";
     } catch (error) {
       this.error = error.message;

@@ -36,6 +36,7 @@ function backupRecordCounts(snapshot) {
     derivatives: library.derivatives?.length || 0,
     derivativeGenerations: library.derivativeGenerations?.length || 0,
     generationJobs: library.generationJobs?.length || 0,
+    githubImportJobs: library.githubImportJobs?.length || 0,
     searchNotificationJobs: notifications.jobs?.length || 0,
     searchNotificationState: notifications.state?.length || 0,
     searchNotificationUrlJobs: notifications.urlJobs?.length || 0,

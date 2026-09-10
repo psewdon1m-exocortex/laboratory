@@ -72,6 +72,13 @@ export class UpdaterClient {
   rollback(id) {
     return this.request("POST", `/v1/jobs/${encodeURIComponent(id)}/rollback`, null, true, 30_000);
   }
+
+  updateNeptune(version) {
+    return this.request("POST", "/v1/components/neptune-linux/update", {
+      head_id: this.headId,
+      version,
+    }, true, 300_000);
+  }
 }
 
 function versionTuple(value) {
@@ -89,22 +96,22 @@ function compareVersions(left, right) {
   return left[3].localeCompare(right[3]);
 }
 
-export async function checkGithubRelease(repositoryUrl, currentVersion, timeoutMs = 5000) {
-  if (!repositoryUrl) throw new Error("repositories.laboratory.url is not configured");
+export async function checkGithubRelease(repositoryUrl, currentVersion, timeoutMs = 5000, service = "laboratory") {
+  if (!repositoryUrl) throw new Error(`repositories.${service}.url is not configured`);
   const parsed = new URL(repositoryUrl);
   const segments = parsed.pathname.replace(/\.git$/, "").split("/").filter(Boolean);
   if (parsed.protocol !== "https:" || parsed.hostname !== "github.com" || segments.length !== 2) {
-    throw new Error("Laboratory repository must be an HTTPS GitHub repository");
+    throw new Error(`${service} repository must be an HTTPS GitHub repository`);
   }
   const response = await fetch(`https://api.github.com/repos/${segments[0]}/${segments[1]}/releases?per_page=100`, {
-    headers: { Accept: "application/vnd.github+json", "User-Agent": "exocortex-laboratory" },
+    headers: { Accept: "application/vnd.github+json", "User-Agent": `exocortex-${service}` },
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) throw new Error(`GitHub returned HTTP ${response.status}`);
   const releases = await response.json();
   const candidates = releases
-    .filter((release) => !release.draft && !release.prerelease && release.tag_name?.startsWith("laboratory-v"))
-    .map((release) => ({ version: release.tag_name.slice("laboratory-v".length), release }))
+    .filter((release) => !release.draft && !release.prerelease && release.tag_name?.startsWith(`${service}-v`))
+    .map((release) => ({ version: release.tag_name.slice(`${service}-v`.length), release }))
     .map((item) => ({ ...item, tuple: versionTuple(item.version) }))
     .filter((item) => item.tuple)
     .sort((a, b) => compareVersions(b.tuple, a.tuple));

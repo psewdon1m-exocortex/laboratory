@@ -23,6 +23,7 @@ import { DerivedContentRuntime } from "./derived-content.js";
 import { EvidenceIndex } from "./evidence-index.js";
 import { GitHubArticleLibrary } from "./github-library.js";
 import { KernelRegisterRuntime } from "./kernel-register.js";
+import { createNeptuneClient } from "./neptune-client.js";
 import { handleMcpRequest, mcpCors } from "./mcp.js";
 import { FixedWindowRateLimiter, publicCors, registerPublicApi } from "./public-api.js";
 import {
@@ -41,6 +42,7 @@ import {
   renderJournalPage,
 } from "./seo.js";
 import { SearchNotificationRuntime } from "./search-notifications.js";
+import { SaturnArticleBundleClient } from "./saturn-library.js";
 import { LaboratoryStore, UPLOAD_SLOTS } from "./storage.js";
 import { UpdaterClient, checkGithubRelease } from "./updater.js";
 
@@ -64,7 +66,10 @@ export async function createLaboratoryApp(overrides = {}) {
   const register = new KernelRegisterRuntime(config);
   await register.start();
   const updater = new UpdaterClient(config);
-  const githubLibrary = new GitHubArticleLibrary(config, register, store.library);
+  const neptune = createNeptuneClient(config);
+  const saturnLibrary = new SaturnArticleBundleClient(config, register);
+  const githubLibrary = new GitHubArticleLibrary(config, register, store.library, saturnLibrary);
+  githubLibrary.start();
   const derivedContent = new DerivedContentRuntime(config, store.library, register);
   await derivedContent.start();
   const searchNotifications = new SearchNotificationRuntime(config, store.library, register);
@@ -135,7 +140,7 @@ export async function createLaboratoryApp(overrides = {}) {
     const timestamp = value ? new Date(value) : null;
     if (timestamp && Number.isFinite(timestamp.getTime())) res.setHeader("Last-Modified", timestamp.toUTCString());
   };
-  const setAgentLinks = (req, res, markdownPath = "", canonicalPath = "") => {
+  const setAgentLinks = (req, res, markdownPath = "", canonicalPath = "", preconnectOrigins = []) => {
     const origin = baseUrl(req);
     const values = [
       `<${new URL("/llms.txt", `${origin}/`)}>; rel="describedby"; type="text/markdown"`,
@@ -144,6 +149,7 @@ export async function createLaboratoryApp(overrides = {}) {
     ];
     if (canonicalPath) values.unshift(`<${new URL(canonicalPath, `${origin}/`)}>; rel="canonical"`);
     if (markdownPath) values.unshift(`<${new URL(markdownPath, `${origin}/`)}>; rel="alternate"; type="text/markdown"`);
+    for (const remoteOrigin of new Set(preconnectOrigins)) values.push(`<${remoteOrigin}>; rel="preconnect"`);
     res.setHeader("Link", values.join(", "));
   };
   const restoreFromBuffer = async (buffer) => {
@@ -164,9 +170,10 @@ export async function createLaboratoryApp(overrides = {}) {
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
     res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+    const saturnOrigin = register.state.saturnUrl || config.saturnUrl || "";
     res.setHeader(
       "Content-Security-Policy",
-      `default-src 'self'; script-src 'self' 'nonce-${req.cspNonce}'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'`,
+      `default-src 'self'; script-src 'self' 'nonce-${req.cspNonce}'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: ${saturnOrigin}; media-src 'self' ${saturnOrigin}; connect-src 'self' ${saturnOrigin}; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'`,
     );
     if (store.restoreInProgress && req.path !== "/api/health") {
       res.setHeader("Retry-After", "5");
@@ -307,6 +314,7 @@ export async function createLaboratoryApp(overrides = {}) {
     try {
       const result = await store.library.getFile(req.params[0], Number(req.params[1]), decodeURIComponent(req.params[2]));
       if (!result) return res.status(404).json({ error: "Article file not found" });
+      if (result.remoteUrl) return res.redirect(302, result.remoteUrl);
       res.setHeader("Content-Type", result.file.mime || "application/octet-stream");
       res.setHeader("Content-Length", String(result.bytes.length));
       res.setHeader("Cache-Control", config.environment === "production" ? "public, max-age=31536000, immutable" : "no-cache");
@@ -358,10 +366,10 @@ export async function createLaboratoryApp(overrides = {}) {
       if (event === "ping") return res.json({ accepted: true, event });
       if (event !== "push") return res.status(202).json({ accepted: true, ignored: event || "unknown" });
       const payload = structuredClone(req.body);
-      res.status(202).json({ accepted: true, event });
-      setImmediate(() => githubLibrary.handlePush(payload).catch((error) => {
-        store.library.setSyncState({ lastSyncAt: new Date().toISOString(), lastError: error.message });
-      }));
+      const rawBody = req.rawBody || Buffer.alloc(0);
+      const deliveryId = req.get("X-GitHub-Delivery") || `sha256:${crypto.createHash("sha256").update(rawBody).digest("hex")}`;
+      const queued = githubLibrary.enqueuePush(payload, deliveryId);
+      res.status(202).json({ accepted: true, event, ...queued });
     } catch (error) { next(error); }
   });
 
@@ -528,6 +536,61 @@ export async function createLaboratoryApp(overrides = {}) {
       res.setHeader("Content-Type", "application/zip");
       res.setHeader("Content-Disposition", `attachment; filename="laboratory-backup-${stamp}.zip"`);
       res.send(archive);
+    } catch (error) { next(error); }
+  });
+
+  app.post("/api/internal/neptune/backup", async (req, res, next) => {
+    try {
+      if (!config.neptuneExportTokenFile || !fs.existsSync(config.neptuneExportTokenFile)
+        || !safeCompare(req.get("Authorization"), `Bearer ${fs.readFileSync(config.neptuneExportTokenFile, "utf8").trim()}`)) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      const archive = await createBackup(store, config.version);
+      const checksum = crypto.createHash("sha256").update(archive).digest("hex");
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Length", String(archive.length));
+      res.setHeader("X-Neptune-Archive-Sha256", checksum);
+      res.setHeader("X-Neptune-Source-Version", config.version);
+      res.send(archive);
+    } catch (error) { next(error); }
+  });
+
+  app.get("/api/neptune/status", auth.requireAdmin, async (_req, res, next) => {
+    try { res.json(await neptune.status()); } catch (error) { next(error); }
+  });
+
+  app.put("/api/neptune/schedule", auth.requireMutation, async (req, res, next) => {
+    try {
+      const enabled = req.body?.enabled;
+      const intervalHours = Number(req.body?.interval_hours);
+      if (typeof enabled !== "boolean" || !Number.isInteger(intervalHours) || intervalHours < 1 || intervalHours > 8760) {
+        return res.status(400).json({ error: "Interval must be a whole number of hours between 1 and 8760" });
+      }
+      await neptune.schedule(enabled, intervalHours);
+      res.status(204).send();
+    } catch (error) { next(error); }
+  });
+
+  app.post("/api/neptune/runs", auth.requireMutation, async (_req, res, next) => {
+    try { res.status(202).json(await neptune.run()); } catch (error) { next(error); }
+  });
+
+  app.post("/api/neptune/update/check", auth.requireMutation, async (_req, res, next) => {
+    try {
+      const status = await neptune.status();
+      res.json(await checkGithubRelease(register.state.neptuneRepositoryUrl, status.version, 5000, "neptune-linux"));
+    } catch (error) { next(error); }
+  });
+
+  app.post("/api/neptune/update/install", auth.requireMutation, async (req, res, next) => {
+    try {
+      const requestedVersion = String(req.body?.version ?? "");
+      const status = await neptune.status();
+      const update = await checkGithubRelease(register.state.neptuneRepositoryUrl, status.version, 5000, "neptune-linux");
+      if (!update.update_available || update.available_version !== requestedVersion) {
+        return res.status(409).json({ error: "Requested Neptune version is not the current upgrade candidate" });
+      }
+      res.json(await updater.updateNeptune(requestedVersion));
     } catch (error) { next(error); }
   });
 
@@ -731,7 +794,10 @@ export async function createLaboratoryApp(overrides = {}) {
     }
     if (article.slug !== requested) return res.redirect(308, `/journal/${encodeURIComponent(article.slug)}`);
     setLastModified(res, contentModifiedAt(["site", "journal"], article.internalId));
-    setAgentLinks(req, res, `/journal/${encodeURIComponent(article.slug)}.md`);
+    const remoteOrigins = article.files
+      .filter((file) => file.storageBackend === "saturn" && file.publicUrl)
+      .map((file) => new URL(file.publicUrl).origin);
+    setAgentLinks(req, res, `/journal/${encodeURIComponent(article.slug)}.md`, "", remoteOrigins);
     sendText(res, "text/html; charset=utf-8", renderArticlePage(templates.get("article.html"), {
       content: content(), article, baseUrl: baseUrl(req), nonce: req.cspNonce, authorName: config.defaultAuthorName,
     }));
@@ -768,7 +834,7 @@ export async function createLaboratoryApp(overrides = {}) {
   });
 
   app.locals.laboratory = {
-    config, store, register, updater, githubLibrary, derivedContent, searchNotifications, audit,
+    config, store, register, updater, neptune, saturnLibrary, githubLibrary, derivedContent, searchNotifications, audit,
     evidenceIndex, agentCatalog,
   };
   return app;
@@ -783,6 +849,7 @@ export async function startServer(overrides = {}) {
   const shutdown = () => {
     server.close(() => {
       app.locals.laboratory.register.stop();
+      app.locals.laboratory.githubLibrary.stop();
       app.locals.laboratory.derivedContent.stop();
       app.locals.laboratory.searchNotifications.stop();
       app.locals.laboratory.store.close();

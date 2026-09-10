@@ -7,6 +7,11 @@ const contentForm = document.querySelector("[data-content-form]");
 const uploadGrid = document.querySelector("[data-upload-grid]");
 const articlesRoot = document.querySelector("[data-admin-articles]");
 const runtimeRoot = document.querySelector("[data-runtime]");
+const neptuneRuntime = document.querySelector("[data-neptune-runtime]");
+const neptuneEnabled = document.querySelector("[data-neptune-enabled]");
+const neptuneInterval = document.querySelector("[data-neptune-interval]");
+const neptuneResult = document.querySelector("[data-neptune-result]");
+const neptuneInstall = document.querySelector("[data-neptune-install]");
 const toast = document.querySelector("[data-toast]");
 const importForm = document.querySelector("[data-article-import-form]");
 const editor = document.querySelector("[data-article-editor]");
@@ -24,6 +29,8 @@ let csrfToken = "";
 let currentState = null;
 let selectedArticleId = "";
 let confirmResolver = null;
+let neptuneStatus = null;
+let neptuneRelease = null;
 
 const uploads = [
   { slot: "heroImage", label: "Hero image", accept: "image/png,image/jpeg,image/webp,image/avif,image/gif" },
@@ -271,12 +278,44 @@ function renderRuntime(runtime) {
   runtimeItem("Updater", runtime.updater?.available ? `${runtime.updater.status} / ${runtime.updater.version}` : "Not installed locally");
 }
 
+function renderNeptune(status) {
+  neptuneRuntime.replaceChildren();
+  runtimeItemInto(neptuneRuntime, "Client", status.client_instance_id);
+  runtimeItemInto(neptuneRuntime, "Version", `${status.product} ${status.version}`);
+  runtimeItemInto(neptuneRuntime, "State", status.active ? "Backup active" : (status.latest_run_state || "Ready"));
+  runtimeItemInto(neptuneRuntime, "Last success", status.last_success_at || "Never");
+  runtimeItemInto(neptuneRuntime, "Next run", status.project.next_run_at || "Not scheduled");
+  neptuneEnabled.checked = status.project.enabled;
+  neptuneInterval.value = String(status.project.interval_hours);
+  neptuneResult.textContent = status.latest_error || "";
+}
+
+function runtimeItemInto(root, name, value) {
+  const term = document.createElement("dt");
+  term.textContent = name;
+  const description = document.createElement("dd");
+  description.textContent = value || "Not configured";
+  root.append(term, description);
+}
+
+async function loadNeptune() {
+  try {
+    neptuneStatus = await api("/api/neptune/status");
+    renderNeptune(neptuneStatus);
+  } catch (error) {
+    neptuneStatus = null;
+    neptuneRuntime.replaceChildren();
+    neptuneResult.textContent = error.message;
+  }
+}
+
 async function loadState() {
   currentState = await api("/api/admin/state");
   fillContent(currentState.content);
   renderUploads(currentState.content);
   renderArticles(currentState.articles);
   renderRuntime(currentState.runtime);
+  await loadNeptune();
   const library = currentState.runtime.contentLibrary || {};
   document.querySelector("[data-library-status]").textContent = library.lastError
     ? `Last sync error: ${library.lastError}`
@@ -469,6 +508,44 @@ document.querySelector("[data-update-check]").addEventListener("click", async ()
     });
     output.appendChild(install);
   } catch (error) { output.textContent = error.message; }
+});
+
+document.querySelector("[data-neptune-save]").addEventListener("click", async () => {
+  try {
+    await mutation("/api/neptune/schedule", { method: "PUT", body: JSON.stringify({ enabled: neptuneEnabled.checked, interval_hours: Number(neptuneInterval.value) }) });
+    await loadNeptune();
+    showToast("Neptune schedule saved");
+  } catch (error) { neptuneResult.textContent = error.message; }
+});
+
+document.querySelector("[data-neptune-run]").addEventListener("click", async () => {
+  try {
+    await mutation("/api/neptune/runs", { method: "POST" });
+    await loadNeptune();
+    showToast("Neptune backup accepted");
+  } catch (error) { neptuneResult.textContent = error.message; }
+});
+
+document.querySelector("[data-neptune-check]").addEventListener("click", async () => {
+  try {
+    neptuneRelease = await mutation("/api/neptune/update/check", { method: "POST" });
+    neptuneResult.textContent = neptuneRelease.update_available
+      ? `Neptune ${neptuneRelease.available_version} is available.`
+      : `Neptune ${neptuneStatus.version} is current.`;
+    neptuneInstall.hidden = !neptuneRelease.update_available;
+    neptuneInstall.textContent = neptuneRelease.update_available ? `Install Neptune ${neptuneRelease.available_version}` : "Install Neptune";
+  } catch (error) { neptuneResult.textContent = error.message; }
+});
+
+neptuneInstall.addEventListener("click", async () => {
+  if (!neptuneRelease?.available_version) return;
+  try {
+    await mutation("/api/neptune/update/install", { method: "POST", body: JSON.stringify({ version: neptuneRelease.available_version }) });
+    neptuneInstall.hidden = true;
+    neptuneRelease = null;
+    await loadNeptune();
+    showToast("Neptune updated");
+  } catch (error) { neptuneResult.textContent = error.message; }
 });
 
 async function initialize() {

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -23,4 +24,10 @@ if (!/^\d+\.\d+\.\d+/.test(manifest.minimum_updater_version || "")
 }
 const bundle = path.join(path.dirname(filename), `laboratory-${manifest.version}-compose.tar.gz`);
 if (!fs.statSync(bundle).isFile()) throw new Error("compose bundle is missing");
+const members = execFileSync("tar", ["-tzf", bundle], { encoding: "utf8" })
+  .split(/\r?\n/)
+  .map((entry) => entry.replace(/^\.\//, ""));
+for (const required of ["updater/install.sh", "updater/updater-linux-amd64", "updater/systemd/updater.service"]) {
+  if (!members.includes(required)) throw new Error(`compose bundle is missing ${required}`);
+}
 console.log(`verified Laboratory ${manifest.version} release contract`);

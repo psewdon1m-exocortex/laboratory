@@ -126,12 +126,28 @@
         </section>
 
         <section class="admin-card section-card">
+          <div class="section-heading"><h2>Backup</h2><p>Manual recovery archives and automatic Neptune delivery to Saturn use the same ZIP bytes.</p></div>
+          <div class="system-actions">
+            <a class="button-link" href="/api/admin/backup" data-backup-download>Download backup</a>
+            <label class="button-file">Restore backup<input type="file" accept="application/zip,.zip" data-restore-input /></label>
+          </div>
+          <dl class="runtime-grid" data-neptune-runtime></dl>
+          <div class="system-actions">
+            <label><input type="checkbox" data-neptune-enabled /> Automatic backup</label>
+            <label>Interval, hours <input type="number" min="1" max="8760" value="24" data-neptune-interval /></label>
+            <button type="button" class="button-quiet" data-neptune-save>Save schedule</button>
+            <button type="button" class="button-quiet" data-neptune-run>Back up to Saturn now</button>
+            <button type="button" class="button-quiet" data-neptune-check>Check Neptune update</button>
+            <button type="button" data-neptune-install hidden>Install Neptune</button>
+          </div>
+          <p class="admin-note" data-neptune-result></p>
+        </section>
+
+        <section class="admin-card section-card">
           <div class="section-heading"><h2>System</h2><p>Kernel Registry, local Updater and recovery.</p></div>
           <dl class="runtime-grid" data-runtime></dl>
           <div class="system-actions">
-            <a class="button-link" href="/api/admin/backup" data-backup-download>Download backup</a>
             <a class="button-link" href="/api/admin/audit/export">Download audit log</a>
-            <label class="button-file">Restore backup<input type="file" accept="application/zip,.zip" data-restore-input /></label>
             <button type="button" class="button-quiet" data-update-check>Check for update</button>
           </div>
           <p class="admin-note" data-update-result></p>

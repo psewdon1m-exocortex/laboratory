@@ -14,13 +14,14 @@ import { createSession, credentialsMatch, readSession } from "../src/auth.js";
 import { createBackup, parseBackup } from "../src/backup.js";
 import { loadConfig } from "../src/config.js";
 import { DerivedContentRuntime, verifyEvidence } from "../src/derived-content.js";
-import { applyLaboratoryRegister, verifySnapshot } from "../src/kernel-register.js";
+import { applyLaboratoryRegister, resolveKernelValues, verifySnapshot } from "../src/kernel-register.js";
 import { createLaboratoryApp } from "../src/server.js";
 import { BOT_POLICY_VERSION, PAGE_TYPE_REGISTRY, evidenceTextHash, renderArticlePage } from "../src/seo.js";
 import { SearchNotificationRuntime } from "../src/search-notifications.js";
 import { DATABASE_SCHEMA_VERSION, LaboratoryStore, validateUpload } from "../src/storage.js";
 import { UpdaterClient } from "../src/updater.js";
 import { GitHubArticleLibrary, articleLocation, repositoryCoordinates } from "../src/github-library.js";
+import { SaturnArticleBundleClient, shareReference } from "../src/saturn-library.js";
 import { placeholderNodeDefinitions } from "../../web/open-node-placeholders.js";
 
 const defaultsDir = fileURLToPath(new URL("../../../data/defaults/", import.meta.url));
@@ -153,7 +154,10 @@ test("Kernel Register resolves Laboratory repository and public URL", () => {
       url: "https://github.com/psewdon1m-exocortex/laboratory",
       content: { url: "https://github.com/psewdon1m-exocortex/laboratory-library", branch: "main" },
     } },
-    services: { laboratory: { sni: "laboratory.example.com", port: "443", ai: { gemini_api_key: "test-open-gemini-key" } } },
+    services: {
+      laboratory: { sni: "laboratory.example.com", port: "443", ai: { gemini_api_key: "resolved-gemini-key" } },
+      volt: { sni: "volt.example.com", port: "443" },
+    },
     intervals: { kernel: { refresh_sec: "75" } },
   };
   const verified = verifySnapshot(snapshot(values));
@@ -168,7 +172,8 @@ test("Kernel Register resolves Laboratory repository and public URL", () => {
   assert.equal(resolved.contentRepositoryUrl, "https://github.com/psewdon1m-exocortex/laboratory-library");
   assert.equal(resolved.contentRepositoryBranch, "main");
   assert.equal(resolved.publicUrl, "https://laboratory.example.com");
-  assert.equal(resolved.geminiApiKey, "test-open-gemini-key");
+  assert.equal(resolved.geminiApiKey, "resolved-gemini-key");
+  assert.equal(resolved.geminiSecretRef, "");
   assert.equal(resolved.refreshSeconds, 75);
   const localOnly = applyLaboratoryRegister({
     repositoryUrl: "",
@@ -197,26 +202,33 @@ test("AI pipeline is controlled by a strict 0/1 environment switch", () => {
   }
 });
 
-test("local Gemini key file overrides Registry only outside production", async (context) => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "laboratory-gemini-key-"));
-  const keyFile = path.join(directory, "gemini-api-key.txt");
-  context.after(() => fs.rm(directory, { recursive: true, force: true }));
-  await fs.writeFile(keyFile, "local-test-gemini-key-123456\n", { mode: 0o600 });
+test("AI pipeline accepts an in-memory value resolved through Kernel", () => {
   const library = { db: {} };
-  const register = { state: { geminiApiKey: "registry-test-gemini-key-654321" } };
-  const development = new DerivedContentRuntime({ environment: "development", geminiApiKeyFile: keyFile }, library, register);
-  assert.deepEqual(development.credential(), {
-    key: "local-test-gemini-key-123456",
-    source: "local-file",
+  const register = { state: { geminiApiKey: "volt-test-gemini-key-654321" }, error: "" };
+  const runtime = new DerivedContentRuntime({ environment: "production" }, library, register);
+  assert.deepEqual(runtime.credential(), {
+    key: "volt-test-gemini-key-654321",
+    source: "volt",
     error: "",
   });
-  await fs.writeFile(keyFile, "PASTE_GEMINI_API_KEY_HERE\n", { mode: 0o600 });
-  assert.equal(development.credential().source, "kernel-register");
-  assert.equal(development.apiKey(), "registry-test-gemini-key-654321");
-  await fs.writeFile(keyFile, "local-test-gemini-key-123456\n", { mode: 0o600 });
-  const production = new DerivedContentRuntime({ environment: "production", geminiApiKeyFile: keyFile }, library, register);
-  assert.equal(production.credential().source, "kernel-register");
-  assert.equal(production.apiKey(), "registry-test-gemini-key-654321");
+  assert.equal(runtime.apiKey(), "volt-test-gemini-key-654321");
+});
+
+test("Kernel broker resolves an exact Register key without caching it", async () => {
+  const key = "services.laboratory.ai.gemini_api_key";
+  let request;
+  const values = await resolveKernelValues({
+    kernelUrl: "https://kernel.example.com",
+    kernelServiceToken: "test-service-token",
+    kernelTimeoutMs: 1000,
+    version: "0.1.0",
+  }, [key], async (url, options) => {
+    request = { url, options };
+    return new Response(JSON.stringify({ schema: "exocortex.register.resolution.v1", values: { [key]: { value: "resolved-secret", secret: true, volt_revision: 4 } } }), { status: 200, headers: { "content-type": "application/json" } });
+  });
+  assert.equal(values[key].value, "resolved-secret");
+  assert.equal(request.url, "https://kernel.example.com/api/v1/register/resolve");
+  assert.equal(request.options.headers.Authorization, "Bearer test-service-token");
 });
 
 test("SQLite content model seeds English pages and searchable articles", async (context) => {
@@ -388,8 +400,10 @@ test("GitHub library accepts only the registered repository and signed payloads"
     fullName: "psewdon1m-exocortex/laboratory-library",
     url: "https://github.com/psewdon1m-exocortex/laboratory-library",
   });
-  assert.deepEqual(articleLocation("published/My Study.zip"), { path: "published/My Study.zip", status: "published", archiveName: "My Study.zip" });
-  assert.deepEqual(articleLocation("unpublished/My Study.zip"), { path: "unpublished/My Study.zip", status: "unpublished", archiveName: "My Study.zip" });
+  assert.deepEqual(articleLocation("published/My Study.zip"), { path: "published/My Study.zip", status: "published", archiveName: "My Study.zip", sourceType: "zip" });
+  assert.deepEqual(articleLocation("unpublished/My Study.zip"), { path: "unpublished/My Study.zip", status: "unpublished", archiveName: "My Study.zip", sourceType: "zip" });
+  assert.deepEqual(articleLocation("published/My Study.md"), { path: "published/My Study.md", status: "published", archiveName: "My Study.md", sourceType: "md" });
+  assert.deepEqual(articleLocation("published/My Study.pdf"), { path: "published/My Study.pdf", status: "published", archiveName: "My Study.pdf", sourceType: "pdf" });
   assert.equal(articleLocation("misc/My Study.zip"), null);
   const raw = Buffer.from('{"zen":"safe"}');
   const secret = "github-webhook-secret";
@@ -399,9 +413,201 @@ test("GitHub library accepts only the registered repository and signed payloads"
   assert.throws(() => github.verifyWebhook("sha256=wrong", raw), /Invalid GitHub webhook signature/);
 });
 
-test("GitHub push deletions remove repository-backed articles", async (context) => {
-  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "laboratory-github-delete-"));
+test("direct Markdown imports one Saturn folder share and strips the capability URL", async (context) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "laboratory-direct-source-"));
   const store = await LaboratoryStore.open({ dataDir, defaultsDir });
+  context.after(async () => {
+    store.close();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  });
+  const token = "a".repeat(43);
+  const sharedUrl = `https://saturn.test/s/${token}`;
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+  const saturn = {
+    status: () => ({ configured: true, origin: "https://saturn.test" }),
+    async fetchFolder(value) {
+      assert.equal(value, sharedUrl);
+      return {
+        files: [{ path: "media/cover.png", bytes: png }],
+        remoteFiles: [{ path: "media/movie.mp4", mime: "video/mp4", size: 11 * 1024 * 1024, sha256: "d".repeat(64), storageBackend: "saturn", remoteAssetId: "asset-1", remoteVersionId: "version-1", publicUrl: "https://saturn.test/a/asset-1/movie.mp4" }],
+        manifest: { schema: "laboratory.import.saturn.v1", origin: "https://saturn.test", shareId: "share-1", files: [{ path: "media/cover.png", size: png.length, mime: "image/png" }, { path: "media/movie.mp4", storage: "saturn", size: 11 * 1024 * 1024, mime: "video/mp4", sha256: "d".repeat(64) }] },
+      };
+    },
+  };
+  const github = new GitHubArticleLibrary(
+    { githubToken: "", version: "test" },
+    { state: { contentRepositoryUrl: "https://github.com/psewdon1m-exocortex/laboratory-library", contentRepositoryBranch: "main" } },
+    store.library,
+    saturn,
+  );
+  github.fetchFile = async () => ({
+    buffer: Buffer.from(`${sharedUrl}\n\n# Direct article\n\n::image{media/cover.png}\n\n::video{src="media/movie.mp4"}\n`, "utf8"),
+    sha: "blob-sha",
+  });
+  const imported = await github.importPath("published/Direct Article.md", "1".repeat(40), "1".repeat(40));
+  assert.equal(imported.article.title, "Direct Article");
+  assert.doesNotMatch(imported.article.markdownSource, /saturn\.test|\/s\//);
+  assert.match(imported.article.bodyHtml, /article-image/);
+  assert.match(imported.article.bodyHtml, /https:\/\/saturn\.test\/a\/asset-1\/movie\.mp4/);
+  assert.equal(imported.article.files.find((file) => file.path === "media/movie.mp4").storageBackend, "saturn");
+  assert.equal(JSON.parse(Buffer.from(unzipSync(imported.archive)["metadata.json"]).toString("utf8")).schema, "article.metadata.v1");
+  const revision = store.library.getAdminArticle(imported.article.internalId).revisions[0];
+  assert.equal(revision.sourceManifest.github.commit, "1".repeat(40));
+  assert.equal(revision.sourceManifest.saturn.shareId, "share-1");
+  assert.doesNotMatch(JSON.stringify(revision.sourceManifest), new RegExp(token));
+  const backup = parseBackup(await createBackup(store, "hybrid-test"));
+  const remoteRow = backup.snapshot.library.files.find((file) => file.remote_asset_id === "asset-1");
+  assert.equal(remoteRow.storage_backend, "saturn");
+  assert.equal(remoteRow.remote_version_id, "version-1");
+  assert.equal(Object.keys(backup.files).some((name) => name.includes("asset-1")), false);
+  await assert.rejects(() => store.library.exportArchive(imported.article.internalId), /standalone ZIP cannot preserve/);
+  await assert.rejects(() => store.library.revise(imported.article.internalId, { title: "Unsafe local rewrite" }), /GitHub Markdown source/);
+
+  const restoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "laboratory-hybrid-restore-"));
+  const restored = await LaboratoryStore.open({ dataDir: restoreDir, defaultsDir });
+  try {
+    await restored.restoreSnapshot(backup.snapshot, backup.files);
+    const restoredArticle = restored.getArticle(imported.article.slug);
+    assert.equal(restoredArticle.files.find((file) => file.path === "media/movie.mp4").publicUrl, "https://saturn.test/a/asset-1/movie.mp4");
+  } finally {
+    restored.close();
+    await fs.rm(restoreDir, { recursive: true, force: true });
+  }
+
+  github.fetchFile = async () => ({ buffer: Buffer.from("%PDF-1.4\nstandalone\n", "ascii"), sha: "pdf-blob-sha" });
+  const pdf = await github.importPath("published/Standalone Report.pdf", "2".repeat(40), "2".repeat(40));
+  assert.equal(pdf.article.title, "Standalone Report");
+  assert.equal(pdf.article.format, "pdf");
+
+  github.config.localAssetMaxBytes = 8;
+  await assert.rejects(
+    () => github.importPath("published/Oversized Standalone.pdf", "3".repeat(40), "3".repeat(40)),
+    /must be placed in the Saturn article folder/,
+  );
+});
+
+test("Saturn bundle client accepts only the registered share origin", () => {
+  const client = new SaturnArticleBundleClient(
+    { version: "test", saturnUrl: "", saturnTimeoutMs: 1000 },
+    { state: { saturnUrl: "https://saturn.test" } },
+  );
+  assert.equal(shareReference(`https://saturn.test/s/${"b".repeat(43)}`, client.origin).token, "b".repeat(43));
+  assert.throws(() => shareReference(`https://evil.test/s/${"b".repeat(43)}`, client.origin), /registered Saturn origin/);
+});
+
+test("Saturn bundle client walks a shared folder with one bound session", async () => {
+  const token = "c".repeat(43);
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+  const requests = [];
+  const fetchImpl = async (input, options) => {
+    const url = new URL(input);
+    requests.push({ path: `${url.pathname}${url.search}`, cookie: options.headers.Cookie || "" });
+    const root = `/api/v1/public/shares/${token}`;
+    if (url.pathname === root) return new Response(JSON.stringify({ id: "share-id", resourceId: "folder-root", resourceType: "folder", resourceName: "25.05.2026", mode: "browse", state: "active", locked: false }), { headers: { "content-type": "application/json", "set-cookie": "vault_share_session_dev=session-token; Path=/; HttpOnly" } });
+    if (url.pathname === `${root}/children` && !url.search) return Response.json([{ id: "folder-media", type: "folder", name: "media", sizeBytes: 0 }]);
+    if (url.pathname === `${root}/children` && url.searchParams.get("parentId") === "folder-media") return Response.json([{ id: "file-cover", type: "file", name: "cover.png", sizeBytes: png.length, mimeType: "image/png", sha256: crypto.createHash("sha256").update(png).digest("hex") }]);
+    if (url.pathname === `${root}/content/file-cover`) return new Response(png, { headers: { "content-length": String(png.length), "content-type": "image/png" } });
+    return new Response("missing", { status: 404 });
+  };
+  const client = new SaturnArticleBundleClient(
+    { version: "test", saturnUrl: "", saturnTimeoutMs: 1000 },
+    { state: { saturnUrl: "https://saturn.test" } },
+    fetchImpl,
+  );
+  const bundle = await client.fetchFolder(`https://saturn.test/s/${token}`);
+  assert.equal(bundle.files[0].path, "media/cover.png");
+  assert.match(bundle.files[0].sha256, /^[a-f0-9]{64}$/);
+  assert.ok(requests.slice(1).every((request) => request.cookie === "vault_share_session_dev=session-token"));
+});
+
+test("Saturn bundle client keeps small files local and publishes large immutable assets", async () => {
+  const token = "e".repeat(43);
+  const resourceId = "01900000-0000-7000-8000-000000000111";
+  const assetId = "01900000-0000-7000-8000-000000000112";
+  const versionId = "01900000-0000-7000-8000-000000000113";
+  const sha256 = "a".repeat(64);
+  const small = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
+  const smallSha256 = crypto.createHash("sha256").update(small).digest("hex");
+  const requests = [];
+  const fetchImpl = async (input, options) => {
+    const url = new URL(input);
+    requests.push({ path: url.pathname, method: options.method || "GET", authorization: options.headers.Authorization || "" });
+    const root = `/api/v1/public/shares/${token}`;
+    if (url.pathname === root) return new Response(JSON.stringify({ id: "share-id", resourceId: "folder-root", resourceType: "folder", resourceName: "25.05.2026", mode: "browse", state: "active", locked: false }), { headers: { "set-cookie": "vault_share_session_dev=session-token; Path=/; HttpOnly" } });
+    if (url.pathname === `${root}/children`) return Response.json([
+      { id: "small-file", type: "file", name: "cover.png", sizeBytes: small.length, mimeType: "image/png", sha256: smallSha256 },
+      { id: resourceId, type: "file", name: "movie.mp4", sizeBytes: 11, mimeType: "video/mp4", sha256 },
+    ]);
+    if (url.pathname === `${root}/content/small-file`) return new Response(small, { headers: { "content-length": String(small.length) } });
+    if (url.pathname === "/api/v1/laboratory/imports/from-share") return Response.json({ schema: "saturn.laboratory.snapshot.v1", snapshotId: "share-id", files: [{ path: "media/movie.mp4", resourceId, asset: { id: assetId }, versionId, sizeBytes: 11, sha256, mimeType: "video/mp4", url: `https://saturn.test/a/${assetId}/movie.mp4` }] });
+    return new Response("missing", { status: 404 });
+  };
+  const client = new SaturnArticleBundleClient(
+    { version: "test", saturnUrl: "", saturnTimeoutMs: 1000, saturnClientToken: "client-token", localAssetMaxBytes: 10 },
+    { state: { saturnUrl: "https://saturn.test" } },
+    fetchImpl,
+  );
+  const bundle = await client.fetchFolder(`https://saturn.test/s/${token}`);
+  assert.equal(bundle.files.length, 1);
+  assert.equal(bundle.files[0].path, "media/cover.png");
+  assert.deepEqual(bundle.remoteFiles[0], { path: "media/movie.mp4", mime: "video/mp4", size: 11, sha256, storageBackend: "saturn", remoteAssetId: assetId, remoteVersionId: versionId, publicUrl: `https://saturn.test/a/${assetId}/movie.mp4` });
+  assert.deepEqual(requests.filter((request) => request.path.includes("/content/")).map((request) => request.path), [`/api/v1/public/shares/${token}/content/small-file`]);
+  assert.equal(requests.find((request) => request.method === "POST").authorization, "Bearer client-token");
+});
+
+test("Saturn bundle client refuses a large remote asset without an immutable checksum", async () => {
+  const token = "f".repeat(43);
+  const root = `/api/v1/public/shares/${token}`;
+  const client = new SaturnArticleBundleClient(
+    { version: "test", saturnUrl: "", saturnTimeoutMs: 1000, saturnClientToken: "client-token", localAssetMaxBytes: 10 },
+    { state: { saturnUrl: "https://saturn.test" } },
+    async (input) => {
+      const url = new URL(input);
+      if (url.pathname === root) return new Response(JSON.stringify({ id: "share-id", resourceId: "folder-root", resourceType: "folder", resourceName: "25.05.2026", mode: "browse", state: "active", locked: false }), { headers: { "set-cookie": "vault_share_session_dev=session-token; Path=/; HttpOnly" } });
+      if (url.pathname === `${root}/children`) return Response.json([{ id: "large-file", type: "file", name: "movie.mp4", sizeBytes: 11, mimeType: "video/mp4" }]);
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    },
+  );
+  await assert.rejects(() => client.fetchFolder(`https://saturn.test/s/${token}`), /did not provide a checksum/);
+});
+
+test("GitHub webhook jobs are durable, deduplicated and branch-scoped", async (context) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "laboratory-github-jobs-"));
+  const store = await LaboratoryStore.open({ dataDir, defaultsDir });
+  context.after(async () => {
+    store.close();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  });
+  const github = new GitHubArticleLibrary(
+    { githubToken: "", version: "test", githubImportMaxAttempts: 3 },
+    { state: { contentRepositoryUrl: "https://github.com/psewdon1m-exocortex/laboratory-library", contentRepositoryBranch: "main" } },
+    store.library,
+  );
+  const payload = {
+    ref: "refs/heads/main",
+    before: "1".repeat(40),
+    after: "2".repeat(40),
+    repository: { full_name: "psewdon1m-exocortex/laboratory-library" },
+  };
+  assert.throws(() => github.validatePush({ ...payload, ref: "refs/heads/draft" }), /branch does not match/);
+  assert.equal(github.enqueuePush(payload, "delivery-1").queued, true);
+  assert.equal(github.enqueuePush(payload, "delivery-1").duplicate, true);
+  assert.equal(store.library.db.prepare("SELECT status FROM github_import_jobs WHERE delivery_id = ?").get("delivery-1").status, "pending");
+  github.syncRepository = async (after, before) => {
+    assert.equal(after, payload.after);
+    assert.equal(before, payload.before);
+    return { imported: [], errors: [], moved: [], deleted: [] };
+  };
+  await github.tick();
+  assert.deepEqual(
+    { ...store.library.db.prepare("SELECT status, attempts, last_error FROM github_import_jobs WHERE delivery_id = ?").get("delivery-1") },
+    { status: "complete", attempts: 1, last_error: null },
+  );
+});
+
+test("GitHub push deletions durably archive repository-backed articles", async (context) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "laboratory-github-delete-"));
+  let store = await LaboratoryStore.open({ dataDir, defaultsDir });
   context.after(async () => {
     store.close();
     await fs.rm(dataDir, { recursive: true, force: true });
@@ -425,7 +631,22 @@ test("GitHub push deletions remove repository-backed articles", async (context) 
   });
   assert.equal(result.deleted.length, 1);
   assert.equal(result.deleted[0].internalId, imported.article.internalId);
-  assert.equal(store.library.getAdminArticle(imported.article.internalId), null);
+  assert.equal(store.getArticle(imported.article.slug), null);
+  const retained = store.library.getAdminArticle(imported.article.internalId);
+  assert.equal(retained.status, "unpublished");
+  assert.equal(retained.revisions.length, 1);
+  store.close();
+  store = await LaboratoryStore.open({ dataDir, defaultsDir });
+  assert.equal(store.getArticle(imported.article.slug), null);
+  assert.equal(store.library.getAdminArticle(imported.article.internalId).revisions.length, 1);
+  await store.library.importArchive(articleZip("# Removed through Git"), {
+    archiveName: "Delete Through Git.zip",
+    status: "published",
+    sourceKind: "github",
+    sourcePath,
+  });
+  assert.equal(store.getArticle(imported.article.slug).internalId, imported.article.internalId);
+  assert.equal(store.library.getAdminArticle(imported.article.internalId).revisions.length, 2);
 });
 
 test("v2 backups restore article identities, revisions and files", async (context) => {
@@ -642,6 +863,7 @@ test("HTTP routes, clean article URLs and protected admin mutations work", async
   context.after(async () => {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     app.locals.laboratory.register.stop();
+    app.locals.laboratory.githubLibrary.stop();
     app.locals.laboratory.derivedContent.stop();
     app.locals.laboratory.searchNotifications.stop();
     app.locals.laboratory.store.close();

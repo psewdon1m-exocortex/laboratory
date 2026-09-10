@@ -1,5 +1,9 @@
 # Laboratory
 
+## Автоматические резервные копии
+
+После обычной установки создайте в Saturn одноразовый Neptune setup code и выполните `sudo laboratory-install backup`. Один host-wide Neptune обслуживает Laboratory вместе с другими сервисами; расписание включается в Settings.
+
 Laboratory is the English-only publication module of Exocortex. It keeps the
 photographic, grain-driven visual language of `simple_site` while providing:
 
@@ -42,22 +46,73 @@ the database. The admin backup is a manifest-driven ZIP containing settings,
 assets, article revisions, media, derivatives, tombstones and durable jobs.
 See `docs/BACKUP_AND_RECOVERY.md` for exclusions and restore guarantees.
 
-GitHub is the canonical publication inbox. The content repository is
-`psewdon1m-exocortex/laboratory-library`; its URL and branch are resolved from
-Kernel Register rather than compiled into Laboratory:
+GitHub is the canonical publication inbox. The content repository URL and
+branch are resolved from Kernel Register rather than compiled into Laboratory.
+The primary format is one directly pushed Markdown or PDF file:
 
 ```text
 published/
-  The Shape of a Working Idea.zip
+  The Shape of a Working Idea.md
+  Standalone Report.pdf
 unpublished/
-  Unfinished Observation.zip
+  Unfinished Observation.md
 ```
 
-The directory selects the state and the ZIP filename becomes the title. Every
-archive contains exactly one root-level `article.md` or `article.pdf`. Optional
-files go into `media/` or `attachments/`. `_id.txt` is optional on the first
-push. Laboratory assigns an immutable ID such as `l-01K2Q7W8N6M4` and, when a
-GitHub token is configured, commits the normalized ZIP back to the same path.
+The directory selects the state and the filename without `.md`/`.pdf` becomes
+the title. A Markdown source must put exactly one ordinary Saturn folder share
+URL on its first line. That line is consumed as import metadata and is never
+rendered or exposed by Laboratory. Paths in the shared folder may already use
+`media/` and `attachments/`; otherwise recognized image/audio/video/Open Node
+files are placed under `media/` and other files under `attachments/`. The
+folder name (for example `25.05.2026`) is organizational only; publication time
+is assigned by Laboratory on the first successful import. Every normalized
+revision receives a schema-tagged `metadata.json` automatically. A directly
+pushed PDF is a standalone article and therefore has no first-line share
+reference.
+
+```markdown
+https://drive.example.com/s/<share-token>
+
+# Article body
+
+::image{media/scheme.png}
+```
+
+The share must belong to the Saturn origin resolved from
+`services.saturn.sni` and `services.saturn.port` in Kernel Register. It must be
+an active, unlocked folder share in `browse` or `download_folder` mode.
+Laboratory binds one Saturn share session and creates a hybrid immutable
+revision. Files up to and including `LABORATORY_LOCAL_ASSET_MAX_BYTES`
+(10 MiB by default) are downloaded once, verified by size, detected MIME and
+SHA-256, and stored inside Laboratory. Larger files are not copied into
+Laboratory: its scoped Saturn client asks the Gateway to pin the exact current
+file version and stores only the stable `/a/{asset_id}/{filename}` URL, version
+ID, size, MIME and digest. The browser then requests those large bytes directly
+from Saturn with Range support and a one-year immutable cache policy. Saturn
+does not create a new file or user-visible folder for this operation; the asset
+record references the existing file version. The share capability itself is
+never persisted in article metadata or rendered output.
+
+Large remote files require `LABORATORY_SATURN_CLIENT_TOKEN`, issued once from
+Saturn's scoped Laboratory client API, and Saturn public Laboratory delivery
+must be enabled. A file above the threshold is rejected if Saturn does not
+provide its SHA-256; it is never silently downloaded as a fallback. Open Node
+projects remain local because their structure must be parsed during import.
+A standalone GitHub PDF may be pushed directly only up to the local threshold;
+for a larger PDF, put it in the Saturn folder and link it from a Markdown
+article with `::file{attachments/report.pdf}`. Redirects to another origin are
+rejected.
+
+The full Laboratory backup contains local bytes plus the pinned Saturn asset
+and version references. A standalone article ZIP is intentionally unavailable
+for hybrid articles because it cannot preserve those remote pins; revise such
+articles through their canonical GitHub Markdown source.
+
+The previous ZIP inbox remains supported for compatibility. A ZIP archive
+contains exactly one root-level `article.md` or `article.pdf`; optional files go
+under `media/` or `attachments/`. Its filename remains the title and `_id.txt`
+is optional on first import. Laboratory assigns an immutable ID such as
+`l-01K2Q7W8N6M4` and may commit the normalized ZIP back to the same path.
 
 ```text
 The Shape of a Working Idea.zip
@@ -196,14 +251,12 @@ reserves the output-token allowance for the article artifacts themselves.
 Set `LABORATORY_AI_PIPELINE_ENABLED=0` to pause all model work while keeping
 published derivatives available. Set it to `1` to enable the worker.
 
-In development and tests, the Gemini API key can be placed on a single line in
-`.secrets/gemini-api-key.txt`. The file is ignored by Git, is reread while the
-service is running, and takes precedence over the verified Kernel Register.
-If it is absent or still contains the placeholder, Laboratory falls back to
-`services.laboratory.ai.gemini_api_key` in Kernel Register. Production ignores
-the local file and uses only Kernel Registry. The checked-in Register default is
-an explicit test placeholder and does not enable generation; a production key
-must ultimately be supplied through a secret-store integration.
+The Gemini API key is represented by
+`services.laboratory.ai.gemini_api_key` in Kernel Register as a
+`volt://<entry-id>/<field-id>` reference. Laboratory asks Kernel to
+resolve the Register key and keeps the returned value only in process memory.
+Laboratory has no Volt URL or token; Register caches and Laboratory backups
+never contain the resolved value.
 
 The system instruction is versioned at
 `services/api/src/prompts/article-derivatives.system.txt`. Failed jobs do not
@@ -247,8 +300,9 @@ git commit -m "laboratory: delete article"
 git push origin main
 ```
 
-The webhook removes the linked article and all of its local revisions. A full
-sync also removes repository-backed articles whose ZIP no longer exists.
+The webhook unpublishes a removed source and retains its immutable local
+revisions and stable ID. Re-adding the same source path publishes a new revision.
+Permanent deletion remains an explicit administrator action.
 
 `/private` can import/export the same ZIP, edit Markdown and metadata, replace
 the main PDF/Markdown file, add or remove media and attachments, switch between
@@ -259,40 +313,56 @@ writeback is unavailable, the admin reports that the deletion was local only.
 
 ## Kernel Registry, GitHub and Updater
 
-Laboratory reads these Register keys and retains a verified last-known-good
-snapshot. There are no environment-variable fallbacks for the article
-repository URL or branch:
+Laboratory reads these Register keys as `volt://` references, retains only the
+verified reference snapshot, and batch-resolves the required values through
+Kernel. There are no environment-variable fallbacks for the article repository
+URL or branch, and a fresh process requires available Kernel and Volt:
 
 - `repositories.laboratory.url`
 - `repositories.laboratory.content.url`
 - `repositories.laboratory.content.branch`
 - `services.laboratory.url`, or `services.laboratory.sni` plus `.port`
-- `services.laboratory.ai.gemini_api_key` (temporary open test credential)
+- `services.saturn.sni`
+- `services.saturn.port`
+- `services.laboratory.ai.gemini_api_key`
 - `intervals.kernel.refresh_sec`
 
 The content repository webhook endpoint is `/api/github/webhook`. Configure a
 GitHub push webhook with JSON payloads and the same secret as
 `LABORATORY_CONTENT_WEBHOOK_SECRET`. The token in
 `LABORATORY_CONTENT_GITHUB_TOKEN` needs repository Contents read/write access
-for admin writeback and automatic `_id.txt` commits. Secrets never belong in
-Kernel Register.
+for admin writeback and automatic `_id.txt` commits. Actual values never belong
+in Kernel Register; only their Volt references do.
 
-The production compose file directly mounts the local Updater socket and registers the
-head as `laboratory`. Before replacement the module creates its own v3 backup;
-Updater can restore it through the token-protected internal restore endpoint.
+Push deliveries are validated against both the registered repository and
+`refs/heads/<registered-branch>` before acceptance, deduplicated by
+`X-GitHub-Delivery`, and stored in a durable SQLite queue. The worker reconciles
+the complete source tree at the exact pushed commit SHA; a process restart
+returns interrupted work to `pending` instead of losing the accepted webhook.
+
+The production release bundles the pinned, checksum-verified Updater installer.
+Bootstrap generates `LABORATORY_SESSION_SECRET`, `UPDATER_CONTROL_TOKEN`, socket
+group IDs and Neptune client tokens without rotating existing values. A local
+Kernel URL and service token are copied automatically from
+`/opt/exocortex/kernel/.env`; only a remote Kernel requires those two values to
+be entered manually. The installer then installs or safely upgrades Updater and
+registers the head as `laboratory`. Before replacement the module creates its
+own v3 backup; Updater can restore it through the token-protected internal
+restore endpoint.
 Published releases use `laboratory-vX.Y.Z` tags and a
 `laboratory-release.json` manifest.
 
 ## Production
 
-Bootstrap a specific release, edit the mode-0600 operator file, then run the
-installer:
+Bootstrap a specific release, edit only the remaining OPERATOR INPUT values in
+the mode-0600 file, then run the installer. Do not replace generated Updater or
+Neptune tokens manually:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/psewdon1m-exocortex/laboratory/main/scripts/bootstrap.sh \
   | sudo sh -s -- --version X.Y.Z
 sudoedit /opt/exocortex/laboratory/.env
-sudo /opt/exocortex/laboratory/install.sh
+sudo laboratory-install
 ```
 
 The application remains bound to `127.0.0.1` by design. TLS termination and

@@ -11,12 +11,21 @@ permissions:
   id-token: write
   attestations: write
 
+env:
+  UPDATER_REPOSITORY: ${{ vars.UPDATER_REPOSITORY || 'psewdon1m-exocortex/updater' }}
+
 concurrency:
   group: laboratory-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  quality-gate:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: quality-gate
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -49,6 +58,21 @@ jobs:
 
       - name: Verify vendored runtime assets
         run: node scripts/verify-vendored-assets.mjs
+
+      - name: Download and verify pinned Updater
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_READ_TOKEN || secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          updater_version="$(tr -d '[:space:]' < .release/updater.version)"
+          mkdir -p .release-inputs
+          gh release download "updater-v${updater_version}" \
+            --repo "$UPDATER_REPOSITORY" --dir .release-inputs \
+            --pattern "updater-${updater_version}-install.tar.gz" \
+            --pattern "updater-${updater_version}-install.tar.gz.sha256"
+          (cd .release-inputs && sha256sum -c "updater-${updater_version}-install.tar.gz.sha256")
+          tar -xzf ".release-inputs/updater-${updater_version}-install.tar.gz" -C .release-inputs
 
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
@@ -112,7 +136,10 @@ jobs:
           IMAGE_REFERENCE: ${{ steps.release.outputs.image }}
           IMAGE_DIGEST: ${{ steps.candidate.outputs.digest }}
         run: |
-          bash scripts/build-release.sh "${{ steps.release.outputs.version }}"
+          updater_version="$(tr -d '[:space:]' < .release/updater.version)"
+          UPDATER_BUNDLE_DIR="$PWD/.release-inputs/updater" \
+          UPDATER_BUNDLE_VERSION="$updater_version" \
+            bash scripts/build-release.sh "${{ steps.release.outputs.version }}"
           node scripts/verify-release.mjs release-artifacts/laboratory-release.json
           (cd release-artifacts && sha256sum -c "laboratory-${{ steps.release.outputs.version }}-compose.tar.gz.sha256")
 

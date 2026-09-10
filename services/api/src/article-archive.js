@@ -209,8 +209,13 @@ export function parseArticleArchive(buffer, options = {}) {
 }
 
 export function buildArticleArchive(article) {
-  const files = { "_id.txt": strToU8(`${article.internalId}\n`) };
-  if (article.metadata && Object.keys(article.metadata).length) {
+  const files = {};
+  if (article.internalId) {
+    if (!ARTICLE_ID_PATTERN.test(article.internalId)) throw new Error("Cannot build an article archive with an invalid Laboratory article ID");
+    files["_id.txt"] = strToU8(`${article.internalId}\n`);
+  }
+  if (article.metadata !== undefined) {
+    if (!article.metadata || typeof article.metadata !== "object" || Array.isArray(article.metadata)) throw new Error("Cannot build an article archive with invalid metadata");
     files["metadata.json"] = strToU8(`${JSON.stringify({ schema: "article.metadata.v1", ...article.metadata }, null, 2)}\n`);
   }
   for (const file of article.files) files[safePath(file.path)] = new Uint8Array(file.bytes);

@@ -17,7 +17,7 @@ const DEFAULT_SETTINGS = {
   noiseGrain: "55",
 };
 
-export const DATABASE_SCHEMA_VERSION = 4;
+export const DATABASE_SCHEMA_VERSION = 6;
 
 export const UPLOAD_SLOTS = {
   heroImage: { kind: "image", maxBytes: 25 * 1024 * 1024 },

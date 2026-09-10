@@ -20,6 +20,12 @@ services:
       LABORATORY_CONTENT_GITHUB_TOKEN: "${LABORATORY_CONTENT_GITHUB_TOKEN:?Set LABORATORY_CONTENT_GITHUB_TOKEN in .env}"
       LABORATORY_CONTENT_WEBHOOK_SECRET: "${LABORATORY_CONTENT_WEBHOOK_SECRET:?Set LABORATORY_CONTENT_WEBHOOK_SECRET in .env}"
       LABORATORY_GITHUB_TIMEOUT_SEC: "${LABORATORY_GITHUB_TIMEOUT_SEC:-15}"
+      LABORATORY_SATURN_URL: "${LABORATORY_SATURN_URL:-}"
+      LABORATORY_SATURN_TIMEOUT_SEC: "${LABORATORY_SATURN_TIMEOUT_SEC:-30}"
+      LABORATORY_SATURN_CLIENT_TOKEN: "${LABORATORY_SATURN_CLIENT_TOKEN:?Set the scoped Saturn Laboratory client token in .env}"
+      LABORATORY_LOCAL_ASSET_MAX_BYTES: "${LABORATORY_LOCAL_ASSET_MAX_BYTES:-10485760}"
+      LABORATORY_GITHUB_IMPORT_INTERVAL_SEC: "${LABORATORY_GITHUB_IMPORT_INTERVAL_SEC:-5}"
+      LABORATORY_GITHUB_IMPORT_MAX_ATTEMPTS: "${LABORATORY_GITHUB_IMPORT_MAX_ATTEMPTS:-5}"
       LABORATORY_DEFAULT_LANGUAGE: "${LABORATORY_DEFAULT_LANGUAGE:-en}"
       LABORATORY_DEFAULT_AUTHOR_NAME: "${LABORATORY_DEFAULT_AUTHOR_NAME:-c31e1b26}"
       LABORATORY_AI_PIPELINE_ENABLED: "${LABORATORY_AI_PIPELINE_ENABLED:-1}"
@@ -48,14 +54,30 @@ services:
       UPDATER_SOCKET_PATH: /run/exocortex/updater.sock
       UPDATER_HEAD_ID: "${UPDATER_HEAD_ID:-laboratory}"
       UPDATER_CONTROL_TOKEN: "${UPDATER_CONTROL_TOKEN:?Set UPDATER_CONTROL_TOKEN in .env}"
+      NEPTUNE_SOCKET_PATH: /run/neptune/neptuned.sock
+      NEPTUNE_PROJECT_ID: "${NEPTUNE_PROJECT_ID:-laboratory}"
+      NEPTUNE_CONTROL_TOKEN_FILE: /run/secrets/neptune-control-token
+      NEPTUNE_EXPORT_TOKEN_FILE: /run/secrets/neptune-export-token
     volumes:
       - laboratory-data:/app/data
       - type: bind
         source: "${UPDATER_SOCKET_DIR:-/run/exocortex}"
         target: /run/exocortex
         read_only: true
+      - type: bind
+        source: "${NEPTUNE_SOCKET_DIR:-/run/neptune}"
+        target: /run/neptune
+      - type: bind
+        source: "${NEPTUNE_CONTROL_TOKEN_HOST_FILE:?Set NEPTUNE_CONTROL_TOKEN_HOST_FILE in .env}"
+        target: /run/secrets/neptune-control-token
+        read_only: true
+      - type: bind
+        source: "${NEPTUNE_EXPORT_TOKEN_HOST_FILE:?Set NEPTUNE_EXPORT_TOKEN_HOST_FILE in .env}"
+        target: /run/secrets/neptune-export-token
+        read_only: true
     group_add:
       - "${UPDATER_SOCKET_GID:?Set UPDATER_SOCKET_GID during VPS installation}"
+      - "${NEPTUNE_SOCKET_GID:?Set NEPTUNE_SOCKET_GID during Neptune installation}"
     init: true
     read_only: true
     tmpfs:

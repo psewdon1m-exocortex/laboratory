@@ -66,6 +66,19 @@ function toPublicStatus(value) {
   return value === "published" ? "published" : "unpublished";
 }
 
+function parsedFromMixedFiles({ internalId, title, status, metadata, files }) {
+  const localFiles = files.filter((file) => file.storageBackend !== "saturn");
+  if (localFiles.some((file) => !file.bytes)) throw new Error("Local article files are missing bytes");
+  const archive = buildArticleArchive({ internalId, metadata, files: localFiles });
+  const parsed = parseArticleArchive(archive, { archiveName: `${title}.zip`, title, status });
+  const remoteFiles = files.filter((file) => file.storageBackend === "saturn").map((file) => ({ ...file, bytes: undefined }));
+  if (!remoteFiles.length) return parsed;
+  const manifest = remoteFiles.map((file) => ({ path: file.path, mime: file.mime, size: file.size, sha256: file.sha256, remoteAssetId: file.remoteAssetId, remoteVersionId: file.remoteVersionId, publicUrl: file.publicUrl }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const digest = sha256(Buffer.from(`${parsed.sourceSha256}\n${JSON.stringify(manifest)}`, "utf8"));
+  return { ...parsed, files: [...parsed.files, ...remoteFiles], sourceSha256: digest, archiveSha256: digest };
+}
+
 export class ArticleLibrary {
   constructor({ db, uploadsDir, config, recordContentEvent = () => null }) {
     this.db = db;
@@ -104,6 +117,7 @@ export class ArticleLibrary {
         archive_sha256 TEXT NOT NULL,
         source_kind TEXT NOT NULL,
         source_commit TEXT,
+        source_manifest_json TEXT NOT NULL DEFAULT '{}',
         state TEXT NOT NULL CHECK(state IN ('draft', 'published', 'archived')),
         created_at TEXT NOT NULL,
         UNIQUE(article_id, revision_number)
@@ -113,6 +127,10 @@ export class ArticleLibrary {
         revision_id INTEGER NOT NULL REFERENCES article_revisions(id) ON DELETE CASCADE,
         path TEXT NOT NULL,
         storage_path TEXT NOT NULL UNIQUE,
+        storage_backend TEXT NOT NULL DEFAULT 'local' CHECK(storage_backend IN ('local', 'saturn')),
+        remote_asset_id TEXT,
+        remote_version_id TEXT,
+        remote_url TEXT,
         mime TEXT NOT NULL,
         kind TEXT NOT NULL CHECK(kind IN ('main', 'media', 'attachment')),
         size INTEGER NOT NULL,
@@ -171,6 +189,20 @@ export class ArticleLibrary {
         value TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS github_import_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        delivery_id TEXT NOT NULL UNIQUE,
+        payload_json TEXT NOT NULL,
+        commit_sha TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'running', 'complete', 'failed')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        next_attempt_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_github_import_jobs_ready
+      ON github_import_jobs(status, next_attempt_at, id);
       CREATE TABLE IF NOT EXISTS gone_urls (
         slug TEXT PRIMARY KEY,
         removed_at TEXT NOT NULL,
@@ -187,6 +219,16 @@ export class ArticleLibrary {
     if (!this.db.prepare("PRAGMA table_info(article_revisions)").all().some((column) => column.name === "metadata_json")) {
       this.db.exec("ALTER TABLE article_revisions ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'");
     }
+    if (!this.db.prepare("PRAGMA table_info(article_revisions)").all().some((column) => column.name === "source_manifest_json")) {
+      this.db.exec("ALTER TABLE article_revisions ADD COLUMN source_manifest_json TEXT NOT NULL DEFAULT '{}'");
+    }
+    const fileColumns = new Set(this.db.prepare("PRAGMA table_info(article_files)").all().map((column) => column.name));
+    if (!fileColumns.has("storage_backend")) this.db.exec("ALTER TABLE article_files ADD COLUMN storage_backend TEXT NOT NULL DEFAULT 'local'");
+    if (!fileColumns.has("remote_asset_id")) this.db.exec("ALTER TABLE article_files ADD COLUMN remote_asset_id TEXT");
+    if (!fileColumns.has("remote_version_id")) this.db.exec("ALTER TABLE article_files ADD COLUMN remote_version_id TEXT");
+    if (!fileColumns.has("remote_url")) this.db.exec("ALTER TABLE article_files ADD COLUMN remote_url TEXT");
+    this.db.prepare("UPDATE github_import_jobs SET status = 'pending', next_attempt_at = ?, updated_at = ? WHERE status = 'running'")
+      .run(new Date().toISOString(), new Date().toISOString());
     if (!this.db.prepare("PRAGMA table_info(article_derivatives)").all().some((column) => column.name === "generation_key")) {
       this.db.exec("ALTER TABLE article_derivatives ADD COLUMN generation_key TEXT");
     }
@@ -195,7 +237,6 @@ export class ArticleLibrary {
     }
     this.db.prepare("UPDATE article_derivatives SET generation_key = 'legacy-' || revision_id WHERE generation_key IS NULL OR generation_key = ''").run();
     await this.migrateLegacyArticles();
-    this.db.prepare("UPDATE library_articles SET source_status = 'draft' WHERE source_status = 'archived'").run();
     this.db.exec("PRAGMA optimize");
   }
 
@@ -263,13 +304,17 @@ export class ArticleLibrary {
       size: row.size,
       sha256: row.sha256,
       storagePath: row.storage_path,
+      storageBackend: row.storage_backend || "local",
+      ...(row.remote_asset_id ? { remoteAssetId: row.remote_asset_id } : {}),
+      ...(row.remote_version_id ? { remoteVersionId: row.remote_version_id } : {}),
+      ...(row.remote_url ? { publicUrl: row.remote_url } : {}),
     }));
   }
 
   async revisionFilesWithBytes(revisionId) {
     const result = [];
     for (const file of this.revisionFiles(revisionId)) {
-      result.push({ ...file, bytes: await fs.readFile(path.join(this.rootDir, file.storagePath)) });
+      result.push(file.storageBackend === "saturn" ? file : { ...file, bytes: await fs.readFile(path.join(this.rootDir, file.storagePath)) });
     }
     return result;
   }
@@ -277,7 +322,15 @@ export class ArticleLibrary {
   validateParsed(parsed, context) {
     if (parsed.format === "markdown") renderArticleMarkdown(parsed.markdownSource, parsed.files, context);
     for (const file of parsed.files.filter((candidate) => candidate.mime === "application/vnd.open-node.project")) {
+      if (!file.bytes) throw new Error("Open Node projects must remain local to Laboratory");
       parseOpenNodeProject(file.bytes, file.path);
+    }
+    for (const file of parsed.files.filter((candidate) => candidate.storageBackend === "saturn")) {
+      const remote = new URL(file.publicUrl || "");
+      if (remote.protocol !== "https:" || remote.username || remote.password || remote.search || remote.hash || !file.remoteAssetId || !file.remoteVersionId
+          || !remote.pathname.startsWith(`/a/${encodeURIComponent(file.remoteAssetId)}/`)) {
+        throw new Error(`Invalid remote Saturn asset: ${file.path}`);
+      }
     }
   }
 
@@ -298,8 +351,9 @@ export class ArticleLibrary {
     const wasPublished = article?.source_status === "published";
     const previousPublishedRevision = article?.published_revision_id ? this.revisionRow(article.published_revision_id) : null;
     if (currentRevision?.source_sha256 === parsed.sourceSha256 && currentRevision.state === storageStatus
+        && article.source_status === storageStatus
         && currentRevision.title === parsed.title && slug === article.slug) {
-      return { article: this.readArticle(article, currentRevision, true), changed: false, assignedId: !parsed.internalId, archive: await this.exportArchive(article.internal_id) };
+      return { article: this.readArticle(article, currentRevision, true), changed: false, assignedId: !parsed.internalId, archive: await this.exportArchive(article.internal_id, { allowRemoteOmission: true }) };
     }
     const revisionNumber = article
       ? this.db.prepare("SELECT COALESCE(MAX(revision_number), 0) + 1 AS value FROM article_revisions WHERE article_id = ?").get(article.id).value
@@ -307,8 +361,12 @@ export class ArticleLibrary {
     this.validateParsed(parsed, { internalId, revisionNumber });
     const storedFiles = [];
     for (const file of parsed.files) {
-      const extension = path.extname(file.path).toLowerCase().replace(/[^.a-z0-9]/g, "").slice(0, 12);
       const pathDigest = sha256(Buffer.from(file.path, "utf8")).slice(0, 12);
+      if (file.storageBackend === "saturn") {
+        storedFiles.push({ ...file, storagePath: path.posix.join("saturn", file.remoteAssetId, internalId, revisionLabel(revisionNumber), pathDigest) });
+        continue;
+      }
+      const extension = path.extname(file.path).toLowerCase().replace(/[^.a-z0-9]/g, "").slice(0, 12);
       const storagePath = path.posix.join(internalId, revisionLabel(revisionNumber), `${file.sha256}-${pathDigest}${extension}`);
       await atomicWrite(path.join(this.rootDir, storagePath), file.bytes);
       storedFiles.push({ ...file, storagePath });
@@ -326,26 +384,27 @@ export class ArticleLibrary {
         this.db.prepare("INSERT OR IGNORE INTO article_slug_aliases(slug, article_id) VALUES (?, ?)").run(slug, article.id);
       }
       const revisionInsert = this.db.prepare(`
-        INSERT INTO article_revisions(article_id, revision_number, title, format, main_path, markdown_source, metadata_json, source_sha256, archive_sha256, source_kind, source_commit, state, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO article_revisions(article_id, revision_number, title, format, main_path, markdown_source, metadata_json, source_sha256, archive_sha256, source_kind, source_commit, source_manifest_json, state, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(article.id, revisionNumber, parsed.title, parsed.format, parsed.mainPath, parsed.markdownSource, JSON.stringify(parsed.metadata || {}),
-        parsed.sourceSha256, parsed.archiveSha256, options.sourceKind || "admin", options.sourceCommit || null, storageStatus, now);
+        parsed.sourceSha256, parsed.archiveSha256, options.sourceKind || "admin", options.sourceCommit || null,
+        JSON.stringify(options.sourceManifest || {}), storageStatus, now);
       const revisionId = Number(revisionInsert.lastInsertRowid);
       const fileInsert = this.db.prepare(`
-        INSERT INTO article_files(revision_id, path, storage_path, mime, kind, size, sha256)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO article_files(revision_id, path, storage_path, storage_backend, remote_asset_id, remote_version_id, remote_url, mime, kind, size, sha256)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
-      for (const file of storedFiles) fileInsert.run(revisionId, file.path, file.storagePath, file.mime, file.kind, file.size, file.sha256);
+      for (const file of storedFiles) fileInsert.run(revisionId, file.path, file.storagePath, file.storageBackend || "local", file.remoteAssetId || null, file.remoteVersionId || null, file.publicUrl || null, file.mime, file.kind, file.size, file.sha256);
       let publishedAt = article.published_at;
       let revisedAt = article.revised_at;
       let publishedRevisionId = article.published_revision_id;
       if (storageStatus === "published") {
         if (!publishedAt) publishedAt = options.publishedAt || now;
-        else if (publishedRevisionId && (
+        else if (article.source_status === "archived" || (publishedRevisionId && (
           previousPublishedRevision?.source_sha256 !== parsed.sourceSha256
           || previousPublishedRevision?.title !== parsed.title
           || previousSlug !== slug
-        )) revisedAt = now;
+        ))) revisedAt = now;
         publishedRevisionId = revisionId;
       }
       this.db.prepare(`
@@ -394,7 +453,7 @@ export class ArticleLibrary {
       throw error;
     }
     const saved = this.articleRowByReference(internalId);
-    return { article: this.readArticle(saved, this.revisionRow(saved.current_revision_id), true), changed: true, assignedId: !parsed.internalId, archive: await this.exportArchive(internalId) };
+    return { article: this.readArticle(saved, this.revisionRow(saved.current_revision_id), true), changed: true, assignedId: !parsed.internalId, archive: await this.exportArchive(internalId, { allowRemoteOmission: true }) };
   }
 
   readArticle(article, revision, includeBody = false) {
@@ -422,7 +481,7 @@ export class ArticleLibrary {
       updatedAt: article.updated_at,
       sourcePath: article.source_path,
       pdfSize: revision.format === "pdf" ? main?.size ?? 0 : null,
-      pdfUrl: revision.format === "pdf" ? this.assetUrl(article.internal_id, revision.revision_number, revision.main_path) : null,
+      pdfUrl: revision.format === "pdf" ? (main?.publicUrl || this.assetUrl(article.internal_id, revision.revision_number, revision.main_path)) : null,
       metadata: JSON.parse(revision.metadata_json || "{}"),
       generatedDescription: derivative?.description || null,
       abstractMarkdown: derivative?.abstract_markdown || null,
@@ -502,9 +561,13 @@ export class ArticleLibrary {
     const value = this.readArticle(article, this.revisionRow(article.current_revision_id), true);
     value.revisions = this.db.prepare(`
       SELECT revision_number AS revision, state, source_kind AS sourceKind, source_commit AS sourceCommit,
-             created_at AS createdAt, source_sha256 AS sourceSha256
+             source_manifest_json AS sourceManifestJson, created_at AS createdAt, source_sha256 AS sourceSha256
       FROM article_revisions WHERE article_id = ? ORDER BY revision_number DESC
-    `).all(article.id).map((revision) => ({ ...revision, state: toPublicStatus(revision.state) }));
+    `).all(article.id).map((revision) => {
+      const sourceManifest = JSON.parse(revision.sourceManifestJson || "{}");
+      delete revision.sourceManifestJson;
+      return { ...revision, sourceManifest, state: toPublicStatus(revision.state) };
+    });
     return value;
   }
 
@@ -515,8 +578,9 @@ export class ArticleLibrary {
     if (!revision || revision.id !== article.published_revision_id) return null;
     const file = this.db.prepare("SELECT * FROM article_files WHERE revision_id = ? AND path = ?").get(revision.id, String(filePath).replaceAll("\\", "/"));
     if (!file) return null;
-    const bytes = await fs.readFile(path.join(this.rootDir, file.storage_path));
     const publicArticle = { internalId: article.internal_id, slug: article.slug, title: article.title };
+    if ((file.storage_backend || "local") === "saturn") return { remoteUrl: file.remote_url, file, article: publicArticle };
+    const bytes = await fs.readFile(path.join(this.rootDir, file.storage_path));
     if (workflow) return { project: parseOpenNodeProject(bytes, file.path), file, article: publicArticle };
     return { bytes, file, article: publicArticle };
   }
@@ -563,10 +627,14 @@ export class ArticleLibrary {
     };
   }
 
-  async exportArchive(reference) {
+  async exportArchive(reference, { allowRemoteOmission = false } = {}) {
     const article = this.articleRowByReference(reference);
     if (!article) throw new Error("Article not found");
-    const files = await this.revisionFilesWithBytes(article.current_revision_id);
+    const revisionFiles = await this.revisionFilesWithBytes(article.current_revision_id);
+    if (!allowRemoteOmission && revisionFiles.some((file) => file.storageBackend === "saturn")) {
+      throw new Error("Saturn-backed articles are exported through the Laboratory backup; a standalone ZIP cannot preserve immutable remote references");
+    }
+    const files = revisionFiles.filter((file) => file.storageBackend !== "saturn");
     const revision = this.revisionRow(article.current_revision_id);
     return buildArticleArchive({ internalId: article.internal_id, files, metadata: JSON.parse(revision.metadata_json || "{}") });
   }
@@ -576,14 +644,15 @@ export class ArticleLibrary {
     if (!article) throw new Error("Article not found");
     const revision = this.revisionRow(article.current_revision_id);
     let files = await this.revisionFilesWithBytes(revision.id);
+    if (files.some((file) => file.storageBackend === "saturn")) throw new Error("Saturn-backed articles must be revised through their GitHub Markdown source");
     if (revision.format === "markdown" && changes.markdownSource != null) {
       const source = Buffer.from(String(changes.markdownSource), "utf8");
       files = files.map((file) => file.kind === "main" ? { ...file, bytes: source } : file);
     }
     const title = changes.title == null ? revision.title : cleanTitle(changes.title);
     const metadata = changes.metadata == null ? JSON.parse(revision.metadata_json || "{}") : changes.metadata;
-    const archive = buildArticleArchive({ internalId: article.internal_id, files, metadata });
-    return this.importArchive(archive, {
+    const parsed = parsedFromMixedFiles({ internalId: article.internal_id, title, status: changes.status || toPublicStatus(article.source_status), files, metadata });
+    return this.importArchive(parsed, {
       archiveName: `${title}.zip`, status: changes.status || toPublicStatus(article.source_status), title,
       slug: changes.slug == null ? article.slug : cleanSlug(changes.slug), sourceKind: "admin", sourcePath: article.source_path,
     });
@@ -598,9 +667,10 @@ export class ArticleLibrary {
     if (!isPdf && !isMarkdown) throw new Error("The main article file must be PDF or Markdown");
     const revision = this.revisionRow(article.current_revision_id);
     let files = (await this.revisionFilesWithBytes(revision.id)).filter((candidate) => candidate.kind !== "main");
+    if (files.some((candidate) => candidate.storageBackend === "saturn")) throw new Error("Saturn-backed articles must be revised through their GitHub Markdown source");
     files.unshift({ path: isPdf ? "article.pdf" : "article.md", bytes: file.buffer });
     const title = cleanTitle(changes.title || revision.title);
-    return this.importArchive(buildArticleArchive({ internalId: article.internal_id, files, metadata: JSON.parse(revision.metadata_json || "{}") }), {
+    return this.importArchive(parsedFromMixedFiles({ internalId: article.internal_id, title, status: changes.status || toPublicStatus(article.source_status), files, metadata: JSON.parse(revision.metadata_json || "{}") }), {
       archiveName: `${title}.zip`, title, status: changes.status || toPublicStatus(article.source_status),
       slug: changes.slug || article.slug, sourceKind: "admin", sourcePath: article.source_path,
     });
@@ -613,9 +683,11 @@ export class ArticleLibrary {
     if (!article) throw new Error("Article not found");
     const revision = this.revisionRow(article.current_revision_id);
     const target = `${folder}/${cleanAssetName(file.originalname)}`;
-    const files = (await this.revisionFilesWithBytes(revision.id)).filter((candidate) => candidate.path !== target);
+    const existing = await this.revisionFilesWithBytes(revision.id);
+    if (existing.some((candidate) => candidate.storageBackend === "saturn")) throw new Error("Saturn-backed articles must be revised through their GitHub Markdown source");
+    const files = existing.filter((candidate) => candidate.path !== target);
     files.push({ path: target, bytes: file.buffer });
-    return this.importArchive(buildArticleArchive({ internalId: article.internal_id, files, metadata: JSON.parse(revision.metadata_json || "{}") }), {
+    return this.importArchive(parsedFromMixedFiles({ internalId: article.internal_id, title: revision.title, status: toPublicStatus(article.source_status), files, metadata: JSON.parse(revision.metadata_json || "{}") }), {
       archiveName: `${revision.title}.zip`, status: toPublicStatus(article.source_status), title: revision.title,
       slug: article.slug, sourceKind: "admin", sourcePath: article.source_path,
     });
@@ -626,10 +698,11 @@ export class ArticleLibrary {
     if (!article) throw new Error("Article not found");
     const revision = this.revisionRow(article.current_revision_id);
     const existing = await this.revisionFilesWithBytes(revision.id);
+    if (existing.some((candidate) => candidate.storageBackend === "saturn")) throw new Error("Saturn-backed articles must be revised through their GitHub Markdown source");
     const target = existing.find((file) => file.path === filePath);
     if (!target) throw new Error("Article file not found");
     if (target.kind === "main") throw new Error("The main article file cannot be removed");
-    return this.importArchive(buildArticleArchive({ internalId: article.internal_id, files: existing.filter((file) => file.path !== filePath), metadata: JSON.parse(revision.metadata_json || "{}") }), {
+    return this.importArchive(parsedFromMixedFiles({ internalId: article.internal_id, title: revision.title, status: toPublicStatus(article.source_status), files: existing.filter((file) => file.path !== filePath), metadata: JSON.parse(revision.metadata_json || "{}") }), {
       archiveName: `${revision.title}.zip`, status: toPublicStatus(article.source_status), title: revision.title,
       slug: article.slug, sourceKind: "admin", sourcePath: article.source_path,
     });
@@ -685,12 +758,52 @@ export class ArticleLibrary {
     return article ? this.deleteArticle(article.internal_id) : null;
   }
 
+  moveSourcePath(previousPath, nextPath) {
+    const previous = String(previousPath);
+    const next = String(nextPath);
+    if (previous === next) return null;
+    const article = this.db.prepare("SELECT * FROM library_articles WHERE source_path = ?").get(previous);
+    if (!article) return null;
+    const conflict = this.db.prepare("SELECT internal_id FROM library_articles WHERE source_path = ? AND id <> ?").get(next, article.id);
+    if (conflict) throw new Error(`Cannot move article source path to an existing article: ${next}`);
+    this.db.prepare("UPDATE library_articles SET source_path = ?, updated_at = ? WHERE id = ?")
+      .run(next, new Date().toISOString(), article.id);
+    return { internalId: article.internal_id, previousPath: previous, sourcePath: next };
+  }
+
+  archiveBySourcePath(sourcePath, now = new Date().toISOString()) {
+    const article = this.db.prepare("SELECT * FROM library_articles WHERE source_path = ?").get(String(sourcePath));
+    if (!article || article.source_status === "archived") return null;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const slugs = this.db.prepare("SELECT slug FROM article_slug_aliases WHERE article_id = ?").all(article.id).map((row) => row.slug);
+      const gone = this.db.prepare(`
+        INSERT INTO gone_urls(slug, removed_at, reason, replacement_slug) VALUES (?, ?, 'deleted', NULL)
+        ON CONFLICT(slug) DO UPDATE SET removed_at = excluded.removed_at, reason = excluded.reason, replacement_slug = NULL
+      `);
+      for (const slug of slugs) gone.run(slug, now);
+      if (article.source_status === "published") {
+        this.recordContentEvent({ eventType: "ContentDeleted", scope: "journal", entityId: article.internal_id, slug: article.slug, occurredAt: now });
+      }
+      this.db.prepare(`
+        UPDATE library_articles
+        SET source_status = 'archived', published_revision_id = NULL, updated_at = ?
+        WHERE id = ?
+      `).run(now, article.id);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return { internalId: article.internal_id, title: article.title, slug: article.slug, sourcePath: article.source_path, archived: true };
+  }
+
   async deleteMissingSourcePaths(sourcePaths) {
     const present = new Set([...sourcePaths].map(String));
-    const stale = this.db.prepare("SELECT internal_id, source_path FROM library_articles WHERE source_path IS NOT NULL").all()
+    const stale = this.db.prepare("SELECT internal_id, source_path FROM library_articles WHERE source_path IS NOT NULL AND source_status <> 'archived'").all()
       .filter((article) => !present.has(article.source_path));
     const deleted = [];
-    for (const article of stale) deleted.push(await this.deleteArticle(article.internal_id));
+    for (const article of stale) deleted.push(this.archiveBySourcePath(article.source_path));
     return deleted;
   }
 
@@ -718,12 +831,14 @@ export class ArticleLibrary {
       derivatives: this.db.prepare("SELECT * FROM article_derivatives ORDER BY revision_id").all(),
       derivativeGenerations: this.db.prepare("SELECT * FROM article_derivative_generations ORDER BY id").all(),
       generationJobs: this.db.prepare("SELECT * FROM article_generation_jobs ORDER BY revision_id").all(),
+      githubImportJobs: this.db.prepare("SELECT * FROM github_import_jobs ORDER BY id").all(),
     };
   }
 
   async backupFiles(snapshot) {
     const result = {};
     for (const file of snapshot.files) {
+      if ((file.storage_backend || "local") === "saturn") continue;
       if (!safeStoragePath(file.storage_path)) throw new Error("Invalid article storage path");
       result[`library/${file.storage_path}`] = await fs.readFile(path.join(this.rootDir, file.storage_path));
     }
@@ -742,6 +857,15 @@ export class ArticleLibrary {
     if (!snapshot || !Array.isArray(snapshot.articles) || !Array.isArray(snapshot.revisions) || !Array.isArray(snapshot.files)) throw new Error("Invalid article library backup");
     const descriptors = [];
     for (const file of snapshot.files) {
+      if ((file.storage_backend || "local") === "saturn") {
+        let remote;
+        try { remote = new URL(file.remote_url || ""); } catch { throw new Error("Invalid remote Saturn asset in backup"); }
+        if (!file.remote_asset_id || !file.remote_version_id || remote.protocol !== "https:" || remote.username || remote.password || remote.search || remote.hash
+            || !remote.pathname.startsWith(`/a/${encodeURIComponent(file.remote_asset_id)}/`) || !/^[a-f0-9]{64}$/.test(file.sha256 || "")) {
+          throw new Error("Invalid remote Saturn asset in backup");
+        }
+        continue;
+      }
       if (!safeStoragePath(file.storage_path)) throw new Error("Invalid article storage path in backup");
       const data = files[`library/${file.storage_path}`];
       if (!data || data.length !== file.size || sha256(data) !== file.sha256) throw new Error(`Article file checksum mismatch: ${file.path}`);
@@ -768,19 +892,21 @@ export class ArticleLibrary {
   }
 
   restoreDatabase(snapshot) {
-    this.db.exec("DELETE FROM article_slug_aliases; DELETE FROM article_files; DELETE FROM article_revisions; DELETE FROM library_articles; DELETE FROM gone_urls; DELETE FROM library_sync_state;");
+    this.db.exec("DELETE FROM article_slug_aliases; DELETE FROM article_files; DELETE FROM article_revisions; DELETE FROM library_articles; DELETE FROM gone_urls; DELETE FROM library_sync_state; DELETE FROM github_import_jobs;");
     const articleInsert = this.db.prepare(`INSERT INTO library_articles(id, internal_id, slug, title, source_status, published_at, revised_at, current_revision_id, published_revision_id, source_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     for (const row of snapshot.articles) articleInsert.run(row.id, row.internal_id, row.slug, row.title, row.source_status, row.published_at, row.revised_at, row.current_revision_id, row.published_revision_id, row.source_path, row.created_at, row.updated_at);
-    const revisionInsert = this.db.prepare(`INSERT INTO article_revisions(id, article_id, revision_number, title, format, main_path, markdown_source, metadata_json, source_sha256, archive_sha256, source_kind, source_commit, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-    for (const row of snapshot.revisions) revisionInsert.run(row.id, row.article_id, row.revision_number, row.title, row.format, row.main_path, row.markdown_source, row.metadata_json || "{}", row.source_sha256, row.archive_sha256, row.source_kind, row.source_commit, row.state, row.created_at);
-    const fileInsert = this.db.prepare(`INSERT INTO article_files(id, revision_id, path, storage_path, mime, kind, size, sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-    for (const row of snapshot.files) fileInsert.run(row.id, row.revision_id, row.path, row.storage_path, row.mime, row.kind, row.size, row.sha256);
+    const revisionInsert = this.db.prepare(`INSERT INTO article_revisions(id, article_id, revision_number, title, format, main_path, markdown_source, metadata_json, source_sha256, archive_sha256, source_kind, source_commit, source_manifest_json, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const row of snapshot.revisions) revisionInsert.run(row.id, row.article_id, row.revision_number, row.title, row.format, row.main_path, row.markdown_source, row.metadata_json || "{}", row.source_sha256, row.archive_sha256, row.source_kind, row.source_commit, row.source_manifest_json || "{}", row.state, row.created_at);
+    const fileInsert = this.db.prepare(`INSERT INTO article_files(id, revision_id, path, storage_path, storage_backend, remote_asset_id, remote_version_id, remote_url, mime, kind, size, sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const row of snapshot.files) fileInsert.run(row.id, row.revision_id, row.path, row.storage_path, row.storage_backend || "local", row.remote_asset_id || null, row.remote_version_id || null, row.remote_url || null, row.mime, row.kind, row.size, row.sha256);
     const aliasInsert = this.db.prepare("INSERT INTO article_slug_aliases(slug, article_id) VALUES (?, ?)");
     for (const row of snapshot.aliases || []) aliasInsert.run(row.slug, row.article_id);
     const goneInsert = this.db.prepare("INSERT INTO gone_urls(slug, removed_at, reason, replacement_slug) VALUES (?, ?, ?, ?)");
     for (const row of snapshot.goneUrls || []) goneInsert.run(row.slug, row.removed_at, row.reason, row.replacement_slug);
     const syncInsert = this.db.prepare("INSERT INTO library_sync_state(key, value, updated_at) VALUES (?, ?, ?)");
     for (const row of snapshot.sync || []) syncInsert.run(row.key, row.value, row.updated_at);
+    const githubJobInsert = this.db.prepare(`INSERT INTO github_import_jobs(id, delivery_id, payload_json, commit_sha, status, attempts, last_error, next_attempt_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const row of snapshot.githubImportJobs || []) githubJobInsert.run(row.id, row.delivery_id, row.payload_json, row.commit_sha, row.status === "running" ? "pending" : row.status, row.attempts, row.last_error, row.next_attempt_at, row.created_at, row.updated_at);
     const derivativeInsert = this.db.prepare(`
       INSERT INTO article_derivatives(revision_id, generation_key, source_sha256, provider, model, prompt_version,
         description, abstract_markdown, transcript_markdown, evidence_json, warnings_json, manifest_json,

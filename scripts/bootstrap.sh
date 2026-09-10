@@ -44,7 +44,7 @@ awk '
 stage="$work/stage"
 mkdir -p "$stage"
 tar -xzf "$work/$bundle" -C "$stage" --no-same-owner --no-same-permissions
-for name in compose.production.yaml .env.example README.md install.sh; do
+for name in compose.production.yaml .env.example README.md install.sh updater/install.sh updater/updater-linux-amd64 updater/systemd/updater.service; do
   [ -f "$stage/$name" ] || fail "release bundle is missing $name"
 done
 mkdir -p "$target"
@@ -53,10 +53,11 @@ for name in compose.production.yaml compose.updater.yaml .env.example README.md 
   [ -f "$stage/$name" ] && install -m 0644 "$stage/$name" "$target/$name"
 done
 chmod 0755 "$target/install.sh"
-if [ ! -f "$target/.env" ]; then
-  install -m 0600 "$target/.env.example" "$target/.env"
-fi
+install -d -m 0755 "$target/updater/systemd"
+install -m 0755 "$stage/updater/install.sh" "$stage/updater/updater-linux-amd64" "$target/updater/"
+install -m 0644 "$stage/updater/systemd/updater.service" "$target/updater/systemd/updater.service"
+"$target/install.sh" prepare
 printf '%s\n' \
   "Release $version is verified and staged in $target." \
-  "Edit only the OPERATOR INPUT values in $target/.env; replace every CHANGE_ME." \
-  "Then run: sudo $target/install.sh"
+  "Edit only the OPERATOR INPUT values in $target/.env." \
+  "Then run: sudo laboratory-install"

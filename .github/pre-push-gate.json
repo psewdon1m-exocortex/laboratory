@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "service": "laboratory",
+  "exposure_modes": [
+    "public/indexable",
+    "private"
+  ],
+  "profiles": {
+    "backup_restore": {
+      "applicable": true,
+      "evidence": [
+        "docs/BACKUP_AND_RECOVERY.md",
+        "services/api/src/backup.js",
+        "services/api/tests/laboratory.test.js"
+      ]
+    },
+    "service_update": {
+      "applicable": true,
+      "evidence": [
+        "docs/UPDATER.md",
+        "services/api/src/updater.js",
+        "services/api/tests/laboratory.test.js"
+      ]
+    },
+    "internal_documentation": {
+      "applicable": false,
+      "reason": "Laboratory has public and private pages but no Documentation-tab view."
+    },
+    "technical_documentation": {
+      "applicable": true,
+      "evidence": [
+        "README.md",
+        "RELEASING.md",
+        "docs/PRODUCTION.md",
+        "docs/CI_AND_RELEASES.md"
+      ]
+    },
+    "security": {
+      "applicable": true,
+      "evidence": [
+        "docs/PRODUCTION.md",
+        "services/api/tests/laboratory.test.js"
+      ]
+    },
+    "public_seo_geo": {
+      "applicable": true,
+      "evidence": [
+        "docs/SEO_GEO.md",
+        "services/api/src/seo.js",
+        "services/api/tests/laboratory.test.js"
+      ]
+    },
+    "private_concealed": {
+      "applicable": true,
+      "evidence": [
+        "docs/SEO_GEO.md",
+        "docs/PRODUCTION.md",
+        "services/api/tests/laboratory.test.js"
+      ]
+    }
+  }
+}

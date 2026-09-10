@@ -20,8 +20,9 @@ function parseArguments(raw) {
   return { src: value };
 }
 
-function publicAssetUrl(context, filePath) {
-  const encoded = filePath.split("/").map(encodeURIComponent).join("/");
+function publicAssetUrl(context, file) {
+  if (file.publicUrl) return file.publicUrl;
+  const encoded = file.path.split("/").map(encodeURIComponent).join("/");
   return `/api/article-assets/${encodeURIComponent(context.internalId)}/${context.revisionNumber}/${encoded}`;
 }
 
@@ -65,7 +66,7 @@ function directiveHtml(kind, rawArguments, files, context, referenced) {
       assertMedia(file, "image", reference);
       referenced.add(file.path);
       const alt = references.length === 1 ? (argumentsValue.alt || "") : `${argumentsValue.alt || "Gallery image"} ${index + 1}`;
-      return `<figure><img src="${escapeHtml(publicAssetUrl(context, file.path))}" alt="${escapeHtml(alt)}" loading="lazy" /></figure>`;
+      return `<figure><img src="${escapeHtml(publicAssetUrl(context, file))}" alt="${escapeHtml(alt)}" loading="lazy" /></figure>`;
     }).join("");
     return `<div class="article-gallery${references.length === 1 ? " is-single" : ""}">${images}</div>${caption}`;
   }
@@ -73,7 +74,7 @@ function directiveHtml(kind, rawArguments, files, context, referenced) {
   if (!reference) throw new Error(`${kind} directive requires a file path`);
   const file = resolve(reference);
   referenced.add(file.path);
-  const url = publicAssetUrl(context, file.path);
+  const url = publicAssetUrl(context, file);
   if (kind === "image") {
     assertMedia(file, "image", reference);
     return `<figure class="article-image"><img src="${escapeHtml(url)}" alt="${escapeHtml(argumentsValue.alt || "")}" loading="lazy" />${caption}</figure>`;
@@ -89,7 +90,7 @@ function directiveHtml(kind, rawArguments, files, context, referenced) {
       const posterFile = resolve(argumentsValue.poster);
       assertMedia(posterFile, "image", argumentsValue.poster);
       referenced.add(posterFile.path);
-      poster = ` poster="${escapeHtml(publicAssetUrl(context, posterFile.path))}"`;
+      poster = ` poster="${escapeHtml(publicAssetUrl(context, posterFile))}"`;
     }
     return `<figure class="article-video"><video controls preload="metadata" playsinline src="${escapeHtml(url)}"${poster}></video>${caption}</figure>`;
   }
@@ -103,7 +104,7 @@ function directiveHtml(kind, rawArguments, files, context, referenced) {
 function appendAttachments(html, files, context, referenced) {
   const attachments = files.filter((file) => file.kind === "attachment" && !referenced.has(file.path));
   if (!attachments.length) return html;
-  const links = attachments.map((file) => `<a class="article-file" href="${escapeHtml(publicAssetUrl(context, file.path))}" download><span>${escapeHtml(path.posix.basename(file.path))}</span><small>Download · ${escapeHtml(file.mime || "file")}</small></a>`).join("");
+  const links = attachments.map((file) => `<a class="article-file" href="${escapeHtml(publicAssetUrl(context, file))}" download><span>${escapeHtml(path.posix.basename(file.path))}</span><small>Download · ${escapeHtml(file.mime || "file")}</small></a>`).join("");
   return `${html}<section class="article-attachments"><h2>Attachments</h2>${links}</section>`;
 }
 
