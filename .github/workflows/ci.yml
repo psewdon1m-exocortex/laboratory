@@ -73,8 +73,9 @@ jobs:
             -e 's|^LABORATORY_CONTENT_GITHUB_TOKEN=.*|LABORATORY_CONTENT_GITHUB_TOKEN=ci-github-token|' \
             -e 's|^LABORATORY_CONTENT_WEBHOOK_SECRET=.*|LABORATORY_CONTENT_WEBHOOK_SECRET=ci-webhook-secret|' \
             -e 's|^LABORATORY_SATURN_CLIENT_TOKEN=.*|LABORATORY_SATURN_CLIENT_TOKEN=ci-saturn-client-token|' \
-            -e 's|^UPDATER_SOCKET_GID=.*|UPDATER_SOCKET_GID=0|' \
+            -e 's|^UPDATER_SOCKET_GID=.*|UPDATER_SOCKET_GID=1001|' \
             -e 's|^UPDATER_CONTROL_TOKEN=.*|UPDATER_CONTROL_TOKEN=ci-updater-control-token-32-characters|' \
+            -e 's|^NEPTUNE_SOCKET_GID=.*|NEPTUNE_SOCKET_GID=1002|' \
             .ci.env
           docker compose --env-file .ci.env -f compose.production.yaml config --quiet
           ! docker compose --env-file .ci.env -f compose.production.yaml config | grep -q 'CHANGE_ME'
