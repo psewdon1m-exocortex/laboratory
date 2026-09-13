@@ -1,6 +1,6 @@
 # CI and releases
 
-This document specializes [Part 05 — CI, releases and local updates](../../.docs/PART_05_CI_RELEASES_AND_LOCAL_UPDATES.md); that central contract remains authoritative.
+This document specializes [Part 05 — CI, releases and local updates](https://github.com/psewdon1m-exocortex/general/blob/main/PART_05_CI_RELEASES_AND_LOCAL_UPDATES.md); that central contract remains authoritative.
 
 `Laboratory CI` runs on pull requests and pushes to `main` with read-only repository permissions. It performs a deterministic Node 24 install, all tests, high-severity production dependency audit, JS and shell syntax checks, release-contract construction, production Compose validation, one Docker build and a non-root/read-only container smoke test. Action dependencies are pinned to immutable commit SHAs.
 

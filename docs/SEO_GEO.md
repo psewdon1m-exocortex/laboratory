@@ -1,6 +1,6 @@
 # SEO and GEO contract
 
-This document specializes [Part 08 — SEO and GEO](../../.docs/PART_08_SEO_AND_GEO.md); that central contract remains authoritative.
+This document specializes [Part 08 — SEO and GEO](https://github.com/psewdon1m-exocortex/general/blob/main/PART_08_SEO_AND_GEO.md); that central contract remains authoritative.
 
 The latest About and reader changes do not require a URL or schema migration. About remains a server-rendered `AboutPage` with its configured H1, uploaded Markdown biography, canonical `/about`, `Person.url=/about`, Open Graph and X/Twitter cards. Article scroll restoration is session-only progressive enhancement and does not change source HTML.
 

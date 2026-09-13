@@ -1,6 +1,6 @@
 # Backup and recovery
 
-This document specializes [Part 03 — backup and recovery](../../.docs/PART_03_BACKUP_AND_RECOVERY.md); that central contract remains authoritative.
+This document specializes [Part 03 — backup and recovery](https://github.com/psewdon1m-exocortex/general/blob/main/PART_03_BACKUP_AND_RECOVERY.md); that central contract remains authoritative.
 
 New backups use `exocortex.laboratory.backup.v3` inside `exocortex.laboratory.backup-manifest.v2`. Restore remains compatible with v1 and v2 archives.
 

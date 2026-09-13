@@ -1,6 +1,6 @@
 # Production deployment
 
-This document specializes [Part 04 — bootstrap and deployment](../../.docs/PART_04_BOOTSTRAP_AND_DEPLOYMENT.md); that central contract remains authoritative.
+This document specializes [Part 04 — bootstrap and deployment](https://github.com/psewdon1m-exocortex/general/blob/main/PART_04_BOOTSTRAP_AND_DEPLOYMENT.md); that central contract remains authoritative.
 
 Laboratory is deployed as one non-root container behind the single server-managed Nginx. It does not ship or run an embedded Nginx. The service publishes only a loopback host port and expects its canonical public URL, repository coordinates and AI provider key from Kernel Register.
 

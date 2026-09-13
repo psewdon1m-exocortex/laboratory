@@ -1,6 +1,6 @@
 # Mara Ellison
 
-This document specializes [Part 00 — system unification specification](../../../.docs/PART_00_SYSTEM_UNIFICATION_SPECIFICATION.md); that central contract remains authoritative.
+This document specializes [Part 00 — system unification specification](https://github.com/psewdon1m-exocortex/general/blob/main/PART_00_SYSTEM_UNIFICATION_SPECIFICATION.md); that central contract remains authoritative.
 
 Mara Ellison is an independent writer and systems researcher interested in how tools alter attention, memory, and collective decision-making. Her work moves between field notes, small software experiments, and long-form essays.
 

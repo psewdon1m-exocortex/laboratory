@@ -1,7 +1,7 @@
 # Production readiness record
 
 This record applies the workspace-wide
-[Part 00 authority](../../.docs/PART_00_SYSTEM_UNIFICATION_SPECIFICATION.md) to
+[Part 00 authority](https://github.com/psewdon1m-exocortex/general/blob/main/PART_00_SYSTEM_UNIFICATION_SPECIFICATION.md) to
 Laboratory. The status rows below distinguish implemented evidence from the
 required target contract.
 

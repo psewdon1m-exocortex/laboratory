@@ -1,7 +1,7 @@
 # Releasing Laboratory
 
 This document specializes [Part 05 — CI/CD and release
-security](../.docs/PART_05_CI_RELEASES_AND_LOCAL_UPDATES.md) for this service. If
+security](https://github.com/psewdon1m-exocortex/general/blob/main/PART_05_CI_RELEASES_AND_LOCAL_UPDATES.md) for this service. If
 the two documents differ, Part 05 is authoritative.
 
 Laboratory follows SemVer from the initial `0.0.1`. A plain tag such as
