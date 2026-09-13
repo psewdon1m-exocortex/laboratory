@@ -1,6 +1,12 @@
 # Updater compatibility
 
-Laboratory was audited against `psewdon1m-exocortex/updater` tag `updater-v0.2.1` and commit `b302022bf2b45a1e14d0e35b9c1a64d0127d6f58`.
+This document specializes [Part 05 — CI, releases and local updates](../../.docs/PART_05_CI_RELEASES_AND_LOCAL_UPDATES.md); that central contract remains authoritative.
+
+Historical audit baseline: Laboratory was audited against
+`psewdon1m-exocortex/updater` tag `updater-v0.2.1` and commit
+`b302022bf2b45a1e14d0e35b9c1a64d0127d6f58`. This evidence is non-normative
+for deployment; the current coordinated profile requires Updater 0.4.3 or
+newer and must be revalidated against that version before release.
 
 The application sends `request_id`, `head_id=laboratory`, `service=laboratory`, the requested semantic version and one base64-encoded SHA-256 backup to `POST /v1/updates` over the local Unix socket with `X-Updater-Token`. This matches the current updater model. The release is resolved independently from `repositories.laboratory.url` in verified Kernel Register, and `laboratory-release.json` supplies the immutable image digest and compose-bundle checksum.
 
@@ -11,6 +17,7 @@ Important constraints:
 - `UPDATER_COMPOSE_FILE=compose.production.yaml` must include the updater socket mount itself;
 - `LABORATORY_IMAGE` and `LABORATORY_VERSION` are updater-managed and rewritten atomically;
 - host restore uses `UPDATER_RESTORE_URL` and `UPDATER_RESTORE_FIELD=file`, authenticated by the same control token;
-- compose-contract changes require bootstrap/redeploy because updater 0.2.x performs image replacement using the installed compose file.
+- compose-contract changes require bootstrap/redeploy because the retained
+  updater contract performs image replacement using the installed Compose file.
 
 Updater's own upstream Go suite passed during this audit. Laboratory CI validates the corresponding release manifest, backup ceiling, single-file compose contract and exact image smoke path.

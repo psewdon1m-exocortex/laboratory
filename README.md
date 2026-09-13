@@ -1,8 +1,31 @@
 # Laboratory
 
-## Автоматические резервные копии
+> Documentation authority: the workspace-wide [Part 00](../.docs/PART_00_SYSTEM_UNIFICATION_SPECIFICATION.md)
+> and its applicable Parts are normative. This repository documents
+> Laboratory-specific details only; a conflict is corrected here and a
+> material implementation difference follows the Part 00 divergence protocol.
 
-После обычной установки создайте в Saturn одноразовый Neptune setup code и выполните `sudo laboratory-install backup`. Один host-wide Neptune обслуживает Laboratory вместе с другими сервисами; расписание включается в Settings.
+## Required pre-push gate
+
+After native checks and before every push, complete the checks required by
+[Part 06 — Unified acceptance checklist](../.docs/PART_06_UNIFIED_ACCEPTANCE_CHECKLIST.md) and run the versioned policy in
+`.github/pre-push-gate.json` through `scripts/pre-push-gate.py`. CI repeats the
+gate on `main`. Security is always reviewed; backup/restore, updater, embedded
+Documentation and affected technical docs are reviewed when relevant. Apply
+SEO/GEO checks to intentionally public/indexable surfaces and concealment,
+crawler and probe-resistance checks to private or authenticated surfaces.
+Every area requires `PASS` evidence or a reasoned `N/A`.
+
+## Backup status
+
+Laboratory logical backup and restore follow
+[Part 03](../.docs/PART_03_BACKUP_AND_RECOVERY.md). Laboratory is not currently
+an approved Neptune consumer in Parts 09–11. Any existing
+`laboratory-install backup`, Neptune token provisioning or Laboratory-side
+schedule control is therefore a non-normative implementation divergence and
+must not be used as a supported production path until the central shared-agent
+profile is explicitly extended and accepted. A future approved integration
+must keep schedule ownership only in Saturn → Synchronization.
 
 Laboratory is the English-only publication module of Exocortex. It keeps the
 photographic, grain-driven visual language of `simple_site` while providing:
@@ -13,9 +36,14 @@ photographic, grain-driven visual language of `simple_site` while providing:
 - `/journal/:slug` — a full-screen PDF or Markdown reader;
 - `/private` — private content, article, backup and update controls.
 
-The Node service owns the UI, API and static media. No nginx container or nginx
-configuration is part of this module. In production an external edge proxy may
-forward to the loopback-only listener.
+The Node service owns the UI, API and static media. It does not ship or run an
+nginx container or a second proxy daemon. In production the one
+server-managed Nginx forwards the Laboratory SNI to the loopback-only listener;
+the service release may supply only a versioned, namespaced include/upstream
+example for that server configuration. Coturn is not part of Laboratory: its
+HTTP, streaming and browser interactions are handled through Nginx, and any
+future genuine WebRTC NAT-traversal requirement needs a separate architecture
+decision.
 
 ## Local development
 
@@ -341,8 +369,17 @@ the complete source tree at the exact pushed commit SHA; a process restart
 returns interrupted work to `pending` instead of losing the accepted webhook.
 
 The production release bundles the pinned, checksum-verified Updater installer.
-Bootstrap generates `LABORATORY_SESSION_SECRET`, `UPDATER_CONTROL_TOKEN`, socket
-group IDs and Neptune client tokens without rotating existing values. A local
+Required target release contract (the current implementation gap is recorded
+in [RELEASING.md](RELEASING.md)): Laboratory release CI keeps the private
+release-signing key only in GitHub
+Secrets, derives its public counterpart and embeds only the public key in the
+versioned bootstrap. On a clean host bootstrap creates
+`/etc/exocortex/release-trust/laboratory.pem`, verifies the signed manifest
+before trusting artifact URLs or digests, and prepares only Laboratory and its
+own mode-`0600` `.env`. An existing mismatching key fails closed; no `scp`,
+manual release-key fingerprint or separately downloaded public key is used.
+Bootstrap generates `LABORATORY_SESSION_SECRET`, `UPDATER_CONTROL_TOKEN` and
+socket group IDs without rotating existing values. A local
 Kernel URL and service token are copied automatically from
 `/opt/exocortex/kernel/.env`; only a remote Kernel requires those two values to
 be entered manually. The installer then installs or safely upgrades Updater and
@@ -352,20 +389,38 @@ restore endpoint.
 Published releases use `laboratory-vX.Y.Z` tags and a
 `laboratory-release.json` manifest.
 
-## Production
+## Production target
+
+The following is the required Part 04 procedure, not proof that the current
+release artifacts already satisfy it. The release blocker is recorded in
+[RELEASING.md](RELEASING.md); do not use this path until that gap is closed.
 
 Bootstrap a specific release, edit only the remaining OPERATOR INPUT values in
-the mode-0600 file, then run the installer. Do not replace generated Updater or
-Neptune tokens manually:
+the mode-0600 file, then run the installer. Do not replace generated Updater
+tokens manually:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/psewdon1m-exocortex/laboratory/main/scripts/bootstrap.sh \
-  | sudo sh -s -- --version X.Y.Z
+curl -fsSL https://github.com/psewdon1m-exocortex/laboratory/releases/download/laboratory-vX.Y.Z/bootstrap.sh \
+  | sudo sh
 sudoedit /opt/exocortex/laboratory/.env
+sudo chmod 600 /opt/exocortex/laboratory/.env
 sudo laboratory-install
+sudo laboratory-install status
+curl -fsS http://127.0.0.1:18380/api/health
 ```
 
 The application remains bound to `127.0.0.1` by design. TLS termination and
-public routing belong to the host edge layer, not this module.
+public routing belong to the server-managed Nginx, not this module. The
+`/private` login is public-authenticated and reachable from every client IP;
+do not add `OPERATOR_CIDR`, a VPN prerequisite or a source-IP allow-list.
+Laboratory's Access Key and bounded application session protect private content
+and administration routes.
+
+> Current implementation gap (2026-09-13): runtime configuration still uses
+> `LABORATORY_ADMIN_USERNAME` and `LABORATORY_ADMIN_PASSWORD`. The Access
+> Key-only contract above is therefore not yet implemented and blocks the next
+> production release until a separate code/configuration migration and its
+> tests are complete.
+
 The production runbook, backup drill, updater compatibility and CI contract are
 under `docs/`.

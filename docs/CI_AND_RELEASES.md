@@ -1,8 +1,22 @@
 # CI and releases
 
+This document specializes [Part 05 — CI, releases and local updates](../../.docs/PART_05_CI_RELEASES_AND_LOCAL_UPDATES.md); that central contract remains authoritative.
+
 `Laboratory CI` runs on pull requests and pushes to `main` with read-only repository permissions. It performs a deterministic Node 24 install, all tests, high-severity production dependency audit, JS and shell syntax checks, release-contract construction, production Compose validation, one Docker build and a non-root/read-only container smoke test. Action dependencies are pinned to immutable commit SHAs.
 
-`Release Laboratory` runs only for `laboratory-vX.Y.Z`. The tag version must equal `services/api/package.json`. It builds and pushes one candidate image with SBOM and provenance, smoke-tests that exact registry digest, then promotes the same digest to the semantic and `latest` tags. The workflow generates and verifies the compose bundle, SHA-256 sidecar and updater manifest, attests every release artifact and creates the immutable GitHub release.
+`Release Laboratory` runs only for `laboratory-vX.Y.Z`. The version sequence
+starts at `0.0.1`; a plain `v0.0.1`-style tag runs verification-only CI and
+cannot publish or mutate a release. The qualified tag version must equal
+`services/api/package.json`. The workflow builds and pushes one candidate image
+with SBOM and provenance, smoke-tests that exact registry digest, then promotes
+the same digest to the semantic and `latest` image tags. The protected signing
+job alone receives Laboratory's private release key from GitHub Secrets. It
+signs the updater manifest, derives the public counterpart and embeds only that
+public key in the versioned `bootstrap.sh`; no private key may enter an
+artifact, cache or log. CI verifies that bootstrap provisions
+`/etc/exocortex/release-trust/laboratory.pem`, that the manifest signature and
+compose checksum fail closed, attests every release artifact and creates the
+immutable GitHub release.
 
 Required branch protection for `main`:
 
@@ -18,4 +32,7 @@ Release procedure:
 2. Merge a green pull request.
 3. Create an annotated `laboratory-vX.Y.Z` tag from the protected commit.
 4. Confirm candidate smoke, digest promotion, artifact attestation and GitHub release.
-5. Run a clean bootstrap smoke and backup/restore drill before broad deployment.
+5. Run a clean bootstrap smoke that starts from the embedded public key,
+   creates Laboratory's own `.env`, rejects an invalid manifest before any
+   service download, and requires no `scp` or manual release-key fingerprint.
+6. Run the backup/restore drill before broad deployment.

@@ -1,5 +1,7 @@
 # Backup and recovery
 
+This document specializes [Part 03 — backup and recovery](../../.docs/PART_03_BACKUP_AND_RECOVERY.md); that central contract remains authoritative.
+
 New backups use `exocortex.laboratory.backup.v3` inside `exocortex.laboratory.backup-manifest.v2`. Restore remains compatible with v1 and v2 archives.
 
 ## Included state
@@ -18,7 +20,13 @@ Secrets, session cookies, `.env`, Kernel Register cache, the rebuildable FTS evi
 
 ## Safety limits and validation
 
-The complete ZIP is limited to 128 MiB to match Updater 0.2.x. Preflight parses the ZIP central directory before decompression and rejects ZIP64/multi-disk archives, encryption, unsupported compression, more than 10,000 members, members over 128 MiB, expanded archives over 512 MiB, excessive compression ratios, duplicates, traversal, absolute paths and non-UTF-8 names. Manifest membership, byte sizes and hashes are verified before any mutation.
+The complete ZIP is limited to 128 MiB by the retained Updater transfer
+contract used by the current 0.4.3+ deployment profile. Preflight parses the
+ZIP central directory before decompression and rejects ZIP64/multi-disk
+archives, encryption, unsupported compression, more than 10,000 members,
+members over 128 MiB, expanded archives over 512 MiB, excessive compression
+ratios, duplicates, traversal, absolute paths and non-UTF-8 names. Manifest
+membership, byte sizes and hashes are verified before any mutation.
 
 ## Restore transaction
 
