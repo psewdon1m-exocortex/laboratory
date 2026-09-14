@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import cookieParser from "cookie-parser";
 import express from "express";
 import multer from "multer";
+import { createOperationBudget } from "./operation-budget.js";
 import {
   LoginLimiter,
   authMiddleware,
@@ -13,7 +14,7 @@ import {
   credentialsMatch,
   setSessionCookie,
 } from "./auth.js";
-import { createBackup, MAX_ARCHIVE_BYTES, parseBackup } from "./backup.js";
+import { createBackup, MAX_ARCHIVE_BYTES, parseBackupAsync } from "./backup.js";
 import { AgentCatalog } from "./agent-catalog.js";
 import { AuditLog } from "./audit-log.js";
 import { MAX_ARTICLE_ARCHIVE_BYTES } from "./article-archive.js";
@@ -23,6 +24,7 @@ import { DerivedContentRuntime } from "./derived-content.js";
 import { EvidenceIndex } from "./evidence-index.js";
 import { GitHubArticleLibrary } from "./github-library.js";
 import { KernelRegisterRuntime } from "./kernel-register.js";
+import { loadKernelConnection, saveKernelConnection } from "./kernel-connection.js";
 import { createNeptuneClient } from "./neptune-client.js";
 import { handleMcpRequest, mcpCors } from "./mcp.js";
 import { FixedWindowRateLimiter, publicCors, registerPublicApi } from "./public-api.js";
@@ -62,9 +64,11 @@ function htmlRoute(app, route, filename, publicDir) {
 
 export async function createLaboratoryApp(overrides = {}) {
   const config = loadConfig(overrides);
+  await loadKernelConnection(config);
   const store = await LaboratoryStore.open(config);
   const register = new KernelRegisterRuntime(config);
   await register.start();
+  store.library.resolveSaturnOrigin = () => register.state.saturnUrl;
   const updater = new UpdaterClient(config);
   const neptune = createNeptuneClient(config);
   const saturnLibrary = new SaturnArticleBundleClient(config, register);
@@ -74,10 +78,11 @@ export async function createLaboratoryApp(overrides = {}) {
   await derivedContent.start();
   const searchNotifications = new SearchNotificationRuntime(config, store.library, register);
   searchNotifications.start();
-  const auth = authMiddleware(config);
+  const auth = authMiddleware(config, store.security);
   const audit = new AuditLog(config);
   await audit.initialize();
   const loginLimiter = new LoginLimiter();
+  const archiveOperation = createOperationBudget();
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: config.maxUploadBytes, files: 1, fields: 8 },
@@ -153,15 +158,25 @@ export async function createLaboratoryApp(overrides = {}) {
     res.setHeader("Link", values.join(", "));
   };
   const restoreFromBuffer = async (buffer) => {
-    const parsed = parseBackup(buffer);
+    const parsed = await parseBackupAsync(buffer);
     const restorePoint = await createBackup(store, config.version);
     await store.saveRestorePoint(restorePoint);
     return store.restoreSnapshot(parsed.snapshot, parsed.files);
   };
 
   const app = express();
-  if (config.trustProxy) app.set("trust proxy", 1);
+  if (config.trustProxy) app.set("trust proxy", config.trustedProxyAddresses);
   app.disable("x-powered-by");
+  app.use(async (req, res, next) => {
+    // Authentication and diagnostics remain reachable while discovery is down.
+    // Every public representation that constructs links refreshes the authority first.
+    const independent = /^\/(?:private(?:\/|$)|api\/(?:admin|health|live|ready|internal|updates|neptune)(?:\/|$)|scripts\/|styles\/|fonts\/)/.test(req.path);
+    if (config.kernelUrl && !independent) {
+      await register.refresh();
+      if (register.error) return res.status(503).set("Cache-Control", "no-store").json({ error: "Service discovery is unavailable" });
+    }
+    next();
+  });
   app.use((req, res, next) => {
     req.requestId = req.get("X-Request-ID") || crypto.randomUUID();
     req.cspNonce = crypto.randomBytes(18).toString("base64url");
@@ -175,7 +190,7 @@ export async function createLaboratoryApp(overrides = {}) {
       "Content-Security-Policy",
       `default-src 'self'; script-src 'self' 'nonce-${req.cspNonce}'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: ${saturnOrigin}; media-src 'self' ${saturnOrigin}; connect-src 'self' ${saturnOrigin}; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'`,
     );
-    if (store.restoreInProgress && req.path !== "/api/health") {
+    if (store.restoreInProgress && !["/api/health", "/api/live"].includes(req.path)) {
       res.setHeader("Retry-After", "5");
       return res.status(503).json({ error: "Laboratory restore is in progress", requestId: req.requestId });
     }
@@ -211,13 +226,35 @@ export async function createLaboratoryApp(overrides = {}) {
     res.setHeader("X-Robots-Tag", "noindex, nofollow");
     next();
   });
+  for (const prefix of ["/api/admin", "/api/updates", "/api/neptune", "/api/security"]) {
+    app.use(prefix, (_req, res, next) => {
+      res.setHeader("Cache-Control", "private, no-store");
+      next();
+    });
+  }
   const publicApiLimiter = new FixedWindowRateLimiter({ limit: config.publicApiRateLimit, windowMs: 60_000 });
   const mcpLimiter = new FixedWindowRateLimiter({ limit: config.mcpRateLimit, windowMs: 60_000 });
   app.use("/api/public", publicCors, publicApiLimiter.middleware(requestKey));
   app.use("/mcp", mcpCors, mcpLimiter.middleware(requestKey));
 
+  app.get("/api/live", (_req, res) => res.json({ status: "ok", service: "laboratory", level: "liveness" }));
+
   app.get("/api/health", (_req, res) => {
-    res.json({ status: "ok", service: "laboratory", version: config.version });
+    let ready = !store.restoreInProgress && (!config.kernelUrl || Boolean(register.state.revision) && !register.error);
+    try { store.db.prepare("SELECT 1").get(); } catch { ready = false; }
+    res.status(ready ? 200 : 503).json({ status: ready ? "ok" : "unavailable", service: "laboratory", version: config.version, level: "core-readiness" });
+  });
+
+  app.get("/api/ready", auth.requireAdmin, async (_req, res) => {
+    await register.refresh();
+    const agents = await Promise.allSettled([updater.status(), neptune.status()]);
+    const checks = { kernel: Boolean(register.state.revision) && !register.error, storage: !store.restoreInProgress,
+      updater: agents[0].status === "fulfilled" && agents[0].value.available,
+      neptune: agents[1].status === "fulfilled", github: Boolean(register.state.githubToken && register.state.githubWebhookSecret),
+      saturn: Boolean(register.state.saturnUrl && register.state.saturnClientToken), ai: !config.derivedContentEnabled || Boolean(register.state.geminiApiKey) };
+    const ready = Object.values(checks).every(Boolean);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.status(ready ? 200 : 503).json({ ready, checks, external_delivery_verified: false });
   });
 
   app.get("/api/content", (_req, res) => res.json(store.getContent()));
@@ -377,13 +414,12 @@ export async function createLaboratoryApp(overrides = {}) {
     try {
       const key = requestKey(req);
       loginLimiter.check(key);
-      const username = String(req.body?.username ?? "");
-      const password = String(req.body?.password ?? "");
-      if (!credentialsMatch(username, password, config)) {
+      const accessKey = req.body?.access_key ?? req.body?.accessKey ?? req.body?.password;
+      if (!store.security.verify(accessKey)) {
         return res.status(401).json({ error: "Invalid credentials" });
       }
       loginLimiter.clear(key);
-      const session = createSession(config.adminUsername, config.sessionSecret);
+      const session = createSession(config.adminUsername, config.sessionSecret, store.security.generation());
       setSessionCookie(res, session.token, config);
       res.json({ authenticated: true, username: config.adminUsername, csrfToken: session.csrf });
     } catch (error) {
@@ -395,9 +431,23 @@ export async function createLaboratoryApp(overrides = {}) {
     res.json({ authenticated: true, username: config.adminUsername, csrfToken: req.adminSession.csrf });
   });
 
-  app.post("/api/admin/logout", auth.requireMutation, (_req, res) => {
+  app.post("/api/admin/logout", auth.requireMutation, (req, res) => {
+    store.security.revoke(req.cookies.laboratory_session, req.adminSession.exp);
     clearSessionCookie(res, config);
     res.json({ authenticated: false });
+  });
+
+  app.put("/api/admin/security/access-key", auth.requireMutation, (req, res, next) => {
+    try {
+      loginLimiter.check(`rotate:${requestKey(req)}`);
+      if (!store.security.verify(req.body?.current_access_key)) return res.status(401).json({ error: "Invalid current Access Key" });
+      if (req.body?.new_access_key !== req.body?.confirm_access_key) return res.status(400).json({ error: "Access Keys do not match" });
+      store.security.rotate(req.body.new_access_key);
+      loginLimiter.clear(`rotate:${requestKey(req)}`);
+      const session = createSession(config.adminUsername, config.sessionSecret, store.security.generation());
+      setSessionCookie(res, session.token, config);
+      res.json({ authenticated: true, csrfToken: session.csrf });
+    } catch (error) { next(error); }
   });
 
   app.get("/api/admin/state", auth.requireAdmin, async (_req, res) => {
@@ -406,6 +456,7 @@ export async function createLaboratoryApp(overrides = {}) {
       articles: store.listArticles({ includeDrafts: true }),
       runtime: {
         version: config.version,
+        kernelUrl: config.kernelUrl,
         registerRevision: register.state.revision,
         registerError: register.error,
         repositoryUrl: register.state.repositoryUrl,
@@ -418,20 +469,48 @@ export async function createLaboratoryApp(overrides = {}) {
     });
   });
 
+  app.put("/api/admin/security/kernel", auth.requireMutation, async (req, res, next) => {
+    try {
+      const url = new URL(String(req.body?.url || ""));
+      if (url.protocol !== "https:" || url.username || url.password || url.pathname !== "/" || url.search || url.hash) return res.status(400).json({ error: "Kernel requires an HTTPS origin" });
+      const token = String(req.body?.token || config.kernelServiceToken);
+      if (token.length < 24 || token.length > 4096 || /[\r\n\0]/.test(token) || req.body?.token && token !== req.body?.confirm_token) return res.status(400).json({ error: "Invalid or mismatched Kernel token" });
+      const candidate = new KernelRegisterRuntime({ ...config, kernelUrl: url.origin, kernelServiceToken: token, kernelCachePath: config.kernelCachePath + ".candidate" });
+      try {
+        await candidate.refresh();
+        if (candidate.error || !candidate.state.revision) return res.status(409).json({ error: "Kernel connection or deployment profile validation failed" });
+        await saveKernelConnection(config, url.origin, token);
+        Object.assign(config, { kernelUrl: url.origin, kernelServiceToken: token });
+        await register.refresh();
+        res.json({ kernelUrl: config.kernelUrl, reachable: !register.error });
+      } finally { await fs.promises.rm(config.kernelCachePath + ".candidate", { force: true }); }
+    } catch (error) { next(error); }
+  });
+
+  app.get("/api/admin/telemetry", auth.requireAdmin, async (_req, res, next) => {
+    try { const disk = await fs.promises.statfs(config.dataDir); res.json({ uptime_seconds: process.uptime(), memory: process.memoryUsage(), disk: { total_bytes: disk.blocks * disk.bsize, available_bytes: disk.bavail * disk.bsize, used_bytes: (disk.blocks - disk.bavail) * disk.bsize } }); }
+    catch (error) { next(error); }
+  });
+
+  app.get("/api/admin/documentation", auth.requireAdmin, (_req, res) => res.json({ sections: [
+    { title: "Security", body: "Sign in with the Access Key. Rotation revokes other sessions. Kernel tokens are write-only and validated before replacement." },
+    { title: "Recovery", body: "ZIP archives include content, settings, revisions, queues and the Access Key verifier. Restore replaces application state and signs out all sessions. Target machine enrollment remains in place." },
+    { title: "Connections", body: "Kernel resolves current service origins and provider credentials. Initialize Neptune with a setup code from Saturn. Schedules and remote backup runs are managed in Saturn → Synchronization." },
+    { title: "Updates", body: "Updater checks scoped signed releases, makes a recovery archive and verifies health after replacement. Monitor the job until it reaches a terminal state." },
+    { title: "Part 12: deployment checks", body: "Check core readiness, enrollment, last seen and last successful backup separately. Unknown or stale does not mean zero. After a change verify public DNS/TLS, authenticated integrations and a downloaded-backup restore. Keep the job ID and redacted logs when investigating a failure; never include access keys or tokens." }
+  ] }));
+
   app.put("/api/admin/content", auth.requireMutation, (req, res, next) => {
     try { res.json(store.updateContent(req.body ?? {})); }
     catch (error) { next(error); }
   });
 
-  app.post("/api/admin/upload/:slot", auth.requireMutation, (req, res, next) => {
+  app.post("/api/admin/upload/:slot", auth.requireMutation, archiveOperation(async (req, res, next) => {
     const slot = req.params.slot;
     if (!UPLOAD_SLOTS[slot]) return res.status(400).json({ error: "Unknown upload slot" });
-    upload.single("file")(req, res, async (error) => {
-      if (error) return next(error);
       try { res.json(await store.saveAsset(slot, req.file)); }
       catch (uploadError) { next(uploadError); }
-    });
-  });
+  }, upload.single("file")));
 
   app.delete("/api/admin/upload/:slot", auth.requireMutation, async (req, res, next) => {
     try { res.json(await store.removeAsset(req.params.slot)); }
@@ -444,7 +523,7 @@ export async function createLaboratoryApp(overrides = {}) {
     res.json(article);
   });
 
-  app.get("/api/admin/articles/:id/archive", auth.requireAdmin, async (req, res, next) => {
+  app.get("/api/admin/articles/:id/archive", auth.requireAdmin, archiveOperation(async (req, res, next) => {
     try {
       const article = store.library.getAdminArticle(req.params.id);
       if (!article) return res.status(404).json({ error: "Article not found" });
@@ -453,11 +532,9 @@ export async function createLaboratoryApp(overrides = {}) {
       res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(`${article.title}.zip`)}`);
       res.send(archive);
     } catch (error) { next(error); }
-  });
+  }));
 
-  app.post("/api/admin/articles/import", auth.requireMutation, (req, res, next) => {
-    articleUpload.single("file")(req, res, async (error) => {
-      if (error) return next(error);
+  app.post("/api/admin/articles/import", auth.requireMutation, archiveOperation(async (req, res, next) => {
       try {
         const result = await store.library.importArchive(req.file?.buffer, {
           archiveName: req.file?.originalname,
@@ -468,8 +545,7 @@ export async function createLaboratoryApp(overrides = {}) {
         const writeback = await githubLibrary.writeArticle(result);
         res.status(result.changed ? 201 : 200).json({ ...result, archive: undefined, writeback });
       } catch (importError) { next(importError); }
-    });
-  });
+  }, articleUpload.single("file")));
 
   app.put("/api/admin/articles/:id", auth.requireMutation, async (req, res, next) => {
     try {
@@ -484,27 +560,21 @@ export async function createLaboratoryApp(overrides = {}) {
     catch (error) { next(error); }
   });
 
-  app.post("/api/admin/articles/:id/main", auth.requireMutation, (req, res, next) => {
-    articleUpload.single("file")(req, res, async (error) => {
-      if (error) return next(error);
+  app.post("/api/admin/articles/:id/main", auth.requireMutation, archiveOperation(async (req, res, next) => {
       try {
         const result = await store.library.replaceMain(req.params.id, req.file, req.body || {});
         const writeback = await githubLibrary.writeArticle(result);
         res.json({ ...result, archive: undefined, writeback });
       } catch (replaceError) { next(replaceError); }
-    });
-  });
+  }, articleUpload.single("file")));
 
-  app.post("/api/admin/articles/:id/files/:folder", auth.requireMutation, (req, res, next) => {
-    articleUpload.single("file")(req, res, async (error) => {
-      if (error) return next(error);
+  app.post("/api/admin/articles/:id/files/:folder", auth.requireMutation, archiveOperation(async (req, res, next) => {
       try {
         const result = await store.library.addFile(req.params.id, req.params.folder, req.file);
         const writeback = await githubLibrary.writeArticle(result);
         res.json({ ...result, archive: undefined, writeback });
       } catch (fileError) { next(fileError); }
-    });
-  });
+  }, articleUpload.single("file")));
 
   app.delete("/api/admin/articles/:id/files", auth.requireMutation, async (req, res, next) => {
     try {
@@ -529,7 +599,7 @@ export async function createLaboratoryApp(overrides = {}) {
     catch (error) { next(error); }
   });
 
-  app.get("/api/admin/backup", auth.requireAdmin, async (_req, res, next) => {
+  app.get("/api/admin/backup", auth.requireAdmin, archiveOperation(async (_req, res, next) => {
     try {
       const archive = await createBackup(store, config.version);
       const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
@@ -537,7 +607,7 @@ export async function createLaboratoryApp(overrides = {}) {
       res.setHeader("Content-Disposition", `attachment; filename="laboratory-backup-${stamp}.zip"`);
       res.send(archive);
     } catch (error) { next(error); }
-  });
+  }));
 
   app.post("/api/internal/neptune/backup", async (req, res, next) => {
     try {
@@ -545,6 +615,7 @@ export async function createLaboratoryApp(overrides = {}) {
         || !safeCompare(req.get("Authorization"), `Bearer ${fs.readFileSync(config.neptuneExportTokenFile, "utf8").trim()}`)) {
         return res.status(401).json({ error: "Unauthorized" });
       }
+      return archiveOperation(async (_req, res) => {
       const archive = await createBackup(store, config.version);
       const checksum = crypto.createHash("sha256").update(archive).digest("hex");
       res.setHeader("Content-Type", "application/zip");
@@ -552,6 +623,7 @@ export async function createLaboratoryApp(overrides = {}) {
       res.setHeader("X-Neptune-Archive-Sha256", checksum);
       res.setHeader("X-Neptune-Source-Version", config.version);
       res.send(archive);
+      })(req, res, next);
     } catch (error) { next(error); }
   });
 
@@ -559,26 +631,23 @@ export async function createLaboratoryApp(overrides = {}) {
     try { res.json(await neptune.status()); } catch (error) { next(error); }
   });
 
-  app.put("/api/neptune/schedule", auth.requireMutation, async (req, res, next) => {
+  app.put("/api/neptune/schedule", auth.requireMutation, (_req, res) => res.status(409).json({ error: "Backup schedules are owned by Saturn → Synchronization" }));
+  app.post("/api/neptune/runs", auth.requireMutation, (_req, res) => res.status(409).json({ error: "Remote backup runs are owned by Saturn → Synchronization" }));
+  app.post("/api/neptune/initialize", auth.requireMutation, async (req, res, next) => {
     try {
-      const enabled = req.body?.enabled;
-      const intervalHours = Number(req.body?.interval_hours);
-      if (typeof enabled !== "boolean" || !Number.isInteger(intervalHours) || intervalHours < 1 || intervalHours > 8760) {
-        return res.status(400).json({ error: "Interval must be a whole number of hours between 1 and 8760" });
-      }
-      await neptune.schedule(enabled, intervalHours);
-      res.status(204).send();
+      const code = String(req.body?.enrollment_code || "");
+      if (!/^[A-Za-z0-9_-]{32}$/.test(code)) return res.status(400).json({ error: "Enter the 32-character Saturn setup code" });
+      res.status(202).json(await updater.initializeNeptune(code, "http://127.0.0.1:" + config.port + "/api/internal/neptune/backup"));
     } catch (error) { next(error); }
   });
-
-  app.post("/api/neptune/runs", auth.requireMutation, async (_req, res, next) => {
-    try { res.status(202).json(await neptune.run()); } catch (error) { next(error); }
+  app.post("/api/updates/agent/install", auth.requireMutation, async (_req, res, next) => {
+    try { res.status(202).json(await updater.updateSelf()); } catch (error) { next(error); }
   });
 
   app.post("/api/neptune/update/check", auth.requireMutation, async (_req, res, next) => {
     try {
       const status = await neptune.status();
-      res.json(await checkGithubRelease(register.state.neptuneRepositoryUrl, status.version, 5000, "neptune-linux"));
+      res.json(await updater.checkNeptune(status.version));
     } catch (error) { next(error); }
   });
 
@@ -586,7 +655,7 @@ export async function createLaboratoryApp(overrides = {}) {
     try {
       const requestedVersion = String(req.body?.version ?? "");
       const status = await neptune.status();
-      const update = await checkGithubRelease(register.state.neptuneRepositoryUrl, status.version, 5000, "neptune-linux");
+      const update = await updater.checkNeptune(status.version);
       if (!update.update_available || update.available_version !== requestedVersion) {
         return res.status(409).json({ error: "Requested Neptune version is not the current upgrade candidate" });
       }
@@ -599,35 +668,34 @@ export async function createLaboratoryApp(overrides = {}) {
     catch (error) { next(error); }
   });
 
-  app.get("/api/admin/audit/export", auth.requireAdmin, async (_req, res, next) => {
+  app.get("/api/admin/audit/export", auth.requireAdmin, archiveOperation(async (_req, res, next) => {
     try {
       const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
-      res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
-      res.setHeader("Content-Disposition", `attachment; filename="laboratory-audit-${stamp}.jsonl"`);
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename="laboratory-audit-${stamp}.zip"`);
       res.setHeader("Cache-Control", "private, no-store");
-      res.send(await audit.exportJsonl());
+      res.send(await audit.exportZip());
     } catch (error) { next(error); }
-  });
+  }));
 
-  app.post("/api/admin/restore", auth.requireMutation, (req, res, next) => {
-    backupUpload.single("file")(req, res, async (error) => {
-      if (error) return next(error);
+  app.post("/api/admin/restore", auth.requireMutation, archiveOperation(async (req, res, next) => {
       try {
-        res.json({ restored: await restoreFromBuffer(req.file?.buffer) });
+        const restored = await restoreFromBuffer(req.file?.buffer);
+        clearSessionCookie(res, config);
+        res.json({ restored, reauthenticate: true });
       } catch (restoreError) { next(restoreError); }
-    });
-  });
+  }, backupUpload.single("file")));
 
   app.get("/api/updates/status", auth.requireAdmin, async (_req, res) => {
     res.json({ installedVersion: config.version, repositoryUrl: register.state.repositoryUrl, updater: await updater.status() });
   });
 
   app.post("/api/updates/check", auth.requireMutation, async (_req, res, next) => {
-    try { res.json(await checkGithubRelease(register.state.repositoryUrl, config.version)); }
+    try { await register.refresh(); if (register.error) throw new Error(register.error); res.json(await checkGithubRelease(register.state.repositoryUrl, config.version)); }
     catch (error) { next(error); }
   });
 
-  app.post("/api/updates/apply", auth.requireMutation, async (req, res, next) => {
+  app.post("/api/updates/apply", auth.requireMutation, archiveOperation(async (req, res, next) => {
     try {
       const version = String(req.body?.version ?? "");
       if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error("Invalid release version");
@@ -635,7 +703,7 @@ export async function createLaboratoryApp(overrides = {}) {
       const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
       res.status(202).json(await updater.createUpdate(version, `laboratory-backup-${stamp}.zip`, backup));
     } catch (error) { next(error); }
-  });
+  }));
 
   app.get("/api/updates/jobs/:id", auth.requireAdmin, async (req, res, next) => {
     try { res.json(await updater.job(req.params.id)); }
@@ -651,20 +719,30 @@ export async function createLaboratoryApp(overrides = {}) {
     if (!config.updaterControlToken || !safeCompare(req.get("X-Updater-Token"), config.updaterControlToken)) {
       return res.status(401).json({ error: "Unauthorized" });
     }
-    backupUpload.single("file")(req, res, async (error) => {
-      if (error) return next(error);
+    return archiveOperation(async (req, res) => {
       try {
         res.json({ restored: await restoreFromBuffer(req.file?.buffer) });
       } catch (restoreError) { next(restoreError); }
-    });
+    }, backupUpload.single("file"))(req, res, next);
   });
 
-  app.use("/api/media", express.static(store.uploadsDir, {
+  app.use("/api/media", (req, res, next) => {
+    let relative;
+    try { relative = decodeURIComponent(req.path).replace(/^\/+/, ""); }
+    catch { return res.status(400).end(); }
+    if (relative.startsWith("library/")) {
+      const authenticated = Boolean(auth.session(req));
+      if (!store.library.canReadStoragePath(relative.slice("library/".length), authenticated)) return res.status(404).end();
+      if (authenticated) res.setHeader("Cache-Control", "private, no-store");
+    }
+    next();
+  }, express.static(store.uploadsDir, {
     dotfiles: "deny",
     fallthrough: false,
     etag: true,
     maxAge: config.environment === "production" ? "1h" : 0,
     setHeaders(response, filename) {
+      if (filename.startsWith(store.library.rootDir + path.sep)) response.setHeader("Cache-Control", "private, no-store");
       if (filename.toLowerCase().endsWith(".pdf")) response.setHeader("Content-Type", "application/pdf");
     },
   }));
@@ -847,11 +925,12 @@ export async function startServer(overrides = {}) {
     console.log(`Laboratory listening on http://127.0.0.1:${config.port}`);
   });
   const shutdown = () => {
-    server.close(() => {
+    server.close(async () => {
       app.locals.laboratory.register.stop();
       app.locals.laboratory.githubLibrary.stop();
       app.locals.laboratory.derivedContent.stop();
       app.locals.laboratory.searchNotifications.stop();
+      await app.locals.laboratory.audit.queue;
       app.locals.laboratory.store.close();
       process.exit(0);
     });

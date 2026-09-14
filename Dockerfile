@@ -1,9 +1,13 @@
-FROM node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43
+FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81
 
 WORKDIR /app/services/api
 
 COPY services/api/package*.json ./
-RUN npm ci --omit=dev
+RUN apk upgrade --no-cache \
+    && npm ci --omit=dev \
+    && npm cache clean --force \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/pnpm /usr/local/bin/pnpx /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
 COPY services/api/src ./src
 COPY services/web/static /app/services/web/static

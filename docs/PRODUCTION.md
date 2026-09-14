@@ -6,9 +6,7 @@ Laboratory is deployed as one non-root container behind the single server-manage
 
 ## First installation
 
-> Target contract: the exact-version signed-bootstrap steps below become an
-> approved production path only after the release blocker in
-> [RELEASING.md](../RELEASING.md) is closed and verified.
+> The next release contains this standalone pipeline. Publish the tested Updater 0.4.6 first, then the qualified Laboratory 0.1.2 assets. Earlier published bootstraps do not contain these changes. See [DEPLOYMENT.md](../DEPLOYMENT.md) for the complete scoped Register checklist and activation evidence.
 
 Use a tagged release, never `main`:
 
@@ -22,9 +20,9 @@ sudo laboratory-install status
 curl -fsS http://127.0.0.1:18380/api/health
 ```
 
-Release CI keeps Laboratory's private signing key only in GitHub Secrets and embeds only the derived public counterpart in this versioned bootstrap. Bootstrap creates `/etc/exocortex/release-trust/laboratory.pem`, verifies the signed manifest before trusting its artifact URL or digest, verifies the bundle SHA-256, rejects unsafe archive paths and stages Laboratory's separate mode-`0600` environment file. It fails on an existing mismatching trust key and uses no `scp`, manual release-key fingerprint or separately downloaded public key. The operator changes only the `OPERATOR INPUT` values and every `CHANGE_ME` placeholder. `install.sh` requires Docker Compose v2, Exocortex Updater 0.4.3 or newer, an immutable `LABORATORY_IMAGE=...@sha256:...` reference, and a live updater Unix socket. It validates Compose before mutation, registers the `laboratory` head, starts the service and waits for health.
+Release CI keeps Laboratory's private signing key only in GitHub Secrets and embeds only the derived public counterpart in this versioned bootstrap. Bootstrap creates `/etc/exocortex/release-trust/laboratory.pem`, verifies the signed manifest before trusting its artifact URL or digest, verifies the bundle SHA-256, rejects unsafe archive paths and stages Laboratory's separate mode-`0600` environment file. It fails on an existing mismatching trust key and uses no `scp`, manual release-key fingerprint or separately downloaded public key. The operator changes only the `OPERATOR INPUT` values and every `CHANGE_ME` placeholder. `install.sh` requires Docker Compose v2, Exocortex Updater 0.4.6 or newer, an immutable `LABORATORY_IMAGE=...@sha256:...` reference, and a live updater Unix socket. It validates Compose before mutation, registers the `laboratory` head, starts the service and waits for health.
 
-Server-managed Nginx must route the public SNI to `127.0.0.1:18380` and terminate TLS. The `/private` login is reachable from every client IP; there is no `OPERATOR_CIDR`, VPN prerequisite or source-IP allow-list. Access Key validation and the bounded application session protect all private routes. Kernel Register must contain `repositories.laboratory.url`, `repositories.laboratory.content.url`, `repositories.laboratory.content.branch`, and either `services.laboratory.url` or the matching SNI/port fields.
+Server-managed Nginx must route the public SNI to `127.0.0.1:18380` and terminate TLS. The `/private` login is reachable from every client IP; there is no `OPERATOR_CIDR`, VPN prerequisite or source-IP allow-list. Access Key validation and the bounded application session protect all private routes. Kernel Register must contain `repositories.laboratory.url`, `repositories.laboratory.content.url`, `repositories.laboratory.content.branch`, and all required bindings in the head-owned [deployment profile](../services/api/src/deployment-profile.json), including the matching SNI/port fields.
 
 ## Runtime hardening
 
@@ -43,7 +41,7 @@ Do not copy local `.env`, `.secrets`, `data/runtime`, Kernel cache files or test
 
 ## Compose contract changes
 
-The current Updater 0.4.3+ contract verifies the release Compose bundle but deliberately reuses the installed Compose project when replacing an image. An image-only release therefore must remain compatible with the installed compose contract. A release that raises `compose_contract` requires rerunning bootstrap/install before installing the image update. The release manifest records this number explicitly.
+Updater 0.4.6 verifies the signed Compose bundle, snapshots deployment files and the full existing environment, applies the new Compose configuration, adds missing safe env defaults and preserves existing operator values. Image/version change together. A failed candidate restores deployment/env and the retained logical backup. Bootstrap refuses an existing installation; use the Updater job/rollback flow for upgrades. An incompatible schema/compose contract still requires an explicitly qualified migration.
 
 ## Rollback
 

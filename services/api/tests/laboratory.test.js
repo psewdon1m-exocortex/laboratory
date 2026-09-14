@@ -160,7 +160,9 @@ test("Kernel Register resolves Laboratory repository and public URL", () => {
     },
     intervals: { kernel: { refresh_sec: "75" } },
   };
-  const verified = verifySnapshot(snapshot(values));
+  assert.throws(() => verifySnapshot(snapshot(values)), /non-reference/);
+  // The mapper consumes already-resolved values; machine snapshots contain only refs.
+  const verified = snapshot(values);
   const resolved = applyLaboratoryRegister({
     repositoryUrl: "",
     contentRepositoryUrl: "",
@@ -317,7 +319,7 @@ test("failed restore rolls back database and files, while clean restore removes 
     { key: "siteTitle", value: "bad-one" },
     { key: "siteTitle", value: "bad-two" },
   ];
-  await assert.rejects(() => store.restoreSnapshot(invalid, parsed.files), /UNIQUE constraint/);
+  await assert.rejects(() => store.restoreSnapshot(invalid, parsed.files), /Invalid or duplicate backup setting/);
   assert.equal(store.getContent().siteTitle, "Current state survives");
   assert.equal(await fs.readFile(orphan, "utf8"), "orphan");
 
@@ -464,11 +466,11 @@ test("direct Markdown imports one Saturn folder share and strips the capability 
   await assert.rejects(() => store.library.revise(imported.article.internalId, { title: "Unsafe local rewrite" }), /GitHub Markdown source/);
 
   const restoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "laboratory-hybrid-restore-"));
-  const restored = await LaboratoryStore.open({ dataDir: restoreDir, defaultsDir });
+  const restored = await LaboratoryStore.open({ dataDir: restoreDir, defaultsDir, saturnUrl: "https://saturn-restored.test" });
   try {
     await restored.restoreSnapshot(backup.snapshot, backup.files);
     const restoredArticle = restored.getArticle(imported.article.slug);
-    assert.equal(restoredArticle.files.find((file) => file.path === "media/movie.mp4").publicUrl, "https://saturn.test/a/asset-1/movie.mp4");
+    assert.equal(restoredArticle.files.find((file) => file.path === "media/movie.mp4").publicUrl, "https://saturn-restored.test/a/asset-1/movie.mp4");
   } finally {
     restored.close();
     await fs.rm(restoreDir, { recursive: true, force: true });
@@ -1152,5 +1154,5 @@ test("HTTP routes, clean article URLs and protected admin mutations work", async
   assert.ok(auditEvents.some((event) => event.action === "DELETE /api/admin/articles/:id" || event.action.startsWith("DELETE /api/admin/articles/")));
   assert.ok(auditEvents.every((event) => !JSON.stringify(event).includes("test-admin-password")));
   const auditExport = await fetch(`${baseUrl}/api/admin/audit/export`, { headers: { Cookie: cookie } });
-  assert.match(auditExport.headers.get("content-type"), /application\/x-ndjson/);
+  assert.match(auditExport.headers.get("content-type"), /application\/zip/);
 });

@@ -6,10 +6,7 @@ on:
       - "laboratory-v*"
 
 permissions:
-  contents: write
-  packages: write
-  id-token: write
-  attestations: write
+  contents: read
 
 env:
   UPDATER_REPOSITORY: ${{ vars.UPDATER_REPOSITORY || 'psewdon1m-exocortex/updater' }}
@@ -24,8 +21,15 @@ jobs:
       contents: read
     uses: ./.github/workflows/ci.yml
 
-  release:
+  prepare:
     needs: quality-gate
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      image: ${{ steps.release.outputs.image }}
+      digest: ${{ steps.candidate.outputs.digest }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -49,16 +53,14 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
-      - name: Test release source
-        working-directory: services/api
+      - name: Download current-revision policy evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: laboratory-policy-${{ github.sha }}
+      - name: Verify tag targets current main
         run: |
-          npm ci
-          npm test
-          npm audit --omit=dev --audit-level=high
-
-      - name: Verify vendored runtime assets
-        run: node scripts/verify-vendored-assets.mjs
-
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
       - name: Download and verify pinned Updater
         env:
           GH_TOKEN: ${{ secrets.RELEASE_READ_TOKEN || secrets.GITHUB_TOKEN }}
@@ -70,7 +72,10 @@ jobs:
           gh release download "updater-v${updater_version}" \
             --repo "$UPDATER_REPOSITORY" --dir .release-inputs \
             --pattern "updater-${updater_version}-install.tar.gz" \
-            --pattern "updater-${updater_version}-install.tar.gz.sha256"
+            --pattern "updater-${updater_version}-install.tar.gz.sha256" \
+            --pattern "updater-release.json" --pattern "updater-release.json.sig.json"
+          python3 scripts/verify-release-manifest.py .release-inputs/updater-release.json .release-inputs/updater-release.json.sig.json .release/updater-public-key.pem
+          python3 scripts/verify-updater-bundle.py .release-inputs "$updater_version"
           (cd .release-inputs && sha256sum -c "updater-${updater_version}-install.tar.gz.sha256")
           tar -xzf ".release-inputs/updater-${updater_version}-install.tar.gz" -C .release-inputs
 
@@ -104,8 +109,7 @@ jobs:
           docker run -d --name "$name" --read-only --init --cap-drop ALL \
             --security-opt no-new-privileges:true --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
             --mount "type=volume,source=$volume,target=/app/data" -p 127.0.0.1::18380 \
-            -e LABORATORY_ADMIN_USERNAME=release-operator \
-            -e LABORATORY_ADMIN_PASSWORD=release-test-password \
+            -e LABORATORY_ACCESS_KEY=release-test-access-key-32-characters \
             -e LABORATORY_SESSION_SECRET=release-test-session-secret-32-characters \
             -e LABORATORY_COOKIE_SECURE=true \
             -e LABORATORY_PUBLIC_URL=https://laboratory.example.test \
@@ -118,39 +122,105 @@ jobs:
           done
           curl -fsS "http://127.0.0.1:$port/about" | grep -q '<main'
 
-      - name: Promote the tested digest
-        shell: bash
+      - name: Qualify all pre-signing checks before granting signing access
         run: |
-          set -euo pipefail
-          source="${{ steps.release.outputs.image }}@${{ steps.candidate.outputs.digest }}"
-          docker buildx imagetools create \
-            --tag "${{ steps.release.outputs.image }}:${{ steps.release.outputs.version }}" \
-            --tag "${{ steps.release.outputs.image }}:latest" "$source"
-          promoted=$(docker buildx imagetools inspect \
-            "${{ steps.release.outputs.image }}:${{ steps.release.outputs.version }}" \
-            --format '{{.Manifest.Digest}}')
-          test "$promoted" = "${{ steps.candidate.outputs.digest }}"
+          python3 scripts/known-problems-gate.py --record helper-contract --command python3 scripts/verify-updater-bundle.py .release-inputs "$(cat .release/updater.version)"
+          python3 scripts/known-problems-gate.py --phase pre-signing
+      - name: Preserve unsigned candidate inputs and qualification
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: laboratory-prepared-${{ github.sha }}
+          path: |
+            .release-inputs/
+            .release-evidence/
+            known-problems-report.json
+          include-hidden-files: true
+          if-no-files-found: error
+
+  signing:
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: actions/download-artifact@v4
+        with:
+          name: laboratory-prepared-${{ github.sha }}
+      - name: Revalidate pre-signing receipts
+        run: python3 scripts/known-problems-gate.py --phase pre-signing
+      - name: Export release public key
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: node scripts/sign-release.mjs --export-public-key release-artifacts/laboratory.pem
 
       - name: Build and verify release artifacts
         env:
-          IMAGE_REFERENCE: ${{ steps.release.outputs.image }}
-          IMAGE_DIGEST: ${{ steps.candidate.outputs.digest }}
+          IMAGE_REFERENCE: ${{ needs.prepare.outputs.image }}
+          IMAGE_DIGEST: ${{ needs.prepare.outputs.digest }}
         run: |
           updater_version="$(tr -d '[:space:]' < .release/updater.version)"
           UPDATER_BUNDLE_DIR="$PWD/.release-inputs/updater" \
           UPDATER_BUNDLE_VERSION="$updater_version" \
-            bash scripts/build-release.sh "${{ steps.release.outputs.version }}"
+            bash scripts/build-release.sh "${{ needs.prepare.outputs.version }}"
           node scripts/verify-release.mjs release-artifacts/laboratory-release.json
-          (cd release-artifacts && sha256sum -c "laboratory-${{ steps.release.outputs.version }}-compose.tar.gz.sha256")
+          (cd release-artifacts && sha256sum -c "laboratory-${{ needs.prepare.outputs.version }}-compose.tar.gz.sha256")
+
+      - name: Sign and verify final release assets
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          node scripts/sign-release.mjs release-artifacts/laboratory-release.json
+          python3 scripts/verify-release-manifest.py release-artifacts/laboratory-release.json release-artifacts/laboratory-release.json.sig.json release-artifacts/laboratory.pem
+          sh -n release-artifacts/bootstrap.sh
+          if grep -q '__HEAD_BOOTSTRAP_' release-artifacts/bootstrap.sh; then exit 1; fi
 
       - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
         with:
           subject-path: "release-artifacts/*"
 
-      - name: Publish immutable GitHub release
+      - name: Stage immutable candidate assets without final discovery
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release-artifacts/* \
-            --verify-tag --latest=false --generate-notes \
-            --title "Laboratory ${{ steps.release.outputs.version }}"
+          gh release create "$GITHUB_REF_NAME" release-artifacts/* --verify-tag --prerelease --latest=false --generate-notes --title "laboratory ${{ needs.prepare.outputs.version }}"
+      - name: Verify anonymous published assets and final trust
+        run: |
+          python3 scripts/known-problems-gate.py --record published-assets --command python3 scripts/verify-published-assets.py release-artifacts
+          python3 scripts/known-problems-gate.py --phase final
+          cp known-problems-report.json release-artifacts/known-problems-report.json
+      - name: Attach final qualification evidence
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" release-artifacts/known-problems-report.json
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote the already tested digest
+        run: |
+          docker buildx imagetools create --tag "${{ needs.prepare.outputs.image }}:${{ needs.prepare.outputs.version }}" "${{ needs.prepare.outputs.image }}@${{ needs.prepare.outputs.digest }}"
+          test "$(docker buildx imagetools inspect '${{ needs.prepare.outputs.image }}:${{ needs.prepare.outputs.version }}' --format '{{.Manifest.Digest}}')" = '${{ needs.prepare.outputs.digest }}'
+      - name: Enable final service-qualified discovery
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --prerelease=false --latest=false
+      - name: Preserve gate diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: laboratory-final-evidence-${{ github.sha }}
+          path: |
+            .release-evidence/
+            known-problems-report.json
+          include-hidden-files: true

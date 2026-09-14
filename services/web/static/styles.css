@@ -1113,9 +1113,11 @@ a {
 
 .admin-topbar {
   position: fixed;
-  top: 18px;
-  left: 24px;
-  right: 24px;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 18px 24px;
+  background: var(--bg);
   z-index: 50;
   display: flex;
   justify-content: space-between;

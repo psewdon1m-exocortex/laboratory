@@ -23,8 +23,12 @@
       ]
     },
     "internal_documentation": {
-      "applicable": false,
-      "reason": "Laboratory has public and private pages but no Documentation-tab view."
+      "applicable": true,
+      "evidence": [
+        "services/api/src/server.js",
+        "services/web/static/admin.html",
+        "services/web/static/scripts/admin.js"
+      ]
     },
     "technical_documentation": {
       "applicable": true,

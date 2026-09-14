@@ -39,23 +39,6 @@ random_hex() {
   openssl rand -hex "$1"
 }
 
-copy_local_kernel_bootstrap() {
-  kernel_env=/opt/exocortex/kernel/.env
-  [ -r "$kernel_env" ] || return 0
-  current_url=$(get_env KERNEL_URL)
-  current_token=$(get_env KERNEL_SERVICE_TOKEN)
-  case "$current_url" in ""|*CHANGE_ME*|*replace-me*|*.example.*)
-    local_url=$(get_env_from "$kernel_env" KERNEL_URL)
-    [ -n "$local_url" ] && set_env KERNEL_URL "$local_url"
-    ;;
-  esac
-  case "$current_token" in ""|CHANGE_ME*|change-*|replace-*)
-    local_token=$(get_env_from "$kernel_env" KERNEL_SERVICE_TOKEN)
-    [ -n "$local_token" ] && set_env KERNEL_SERVICE_TOKEN "$local_token"
-    ;;
-  esac
-}
-
 install_command() {
   install -d -m 0755 /usr/local/sbin
   {
@@ -68,7 +51,7 @@ install_command() {
 copy_release_files() {
   mkdir -p "$target"
   chmod 0750 "$target"
-  for name in compose.production.yaml compose.updater.yaml .env.example README.md install.sh; do
+  for name in compose.production.yaml compose.updater.yaml .env.example README.md DEPLOYMENT.md nginx.server.example.conf install.sh; do
     [ -f "$script_dir/$name" ] || fail "release bundle is missing $name"
     if [ "$script_dir/$name" != "$target/$name" ]; then
       install -m 0644 "$script_dir/$name" "$target/$name"
@@ -83,6 +66,8 @@ copy_release_files() {
     install -d -m 0755 "$target/updater/systemd"
     install -m 0755 "$script_dir/updater/install.sh" "$script_dir/updater/updater-linux-amd64" "$target/updater/"
     install -m 0644 "$script_dir/updater/systemd/updater.service" "$target/updater/systemd/updater.service"
+    install -d -m 0755 "$target/updater/release-trust"
+    for scope in updater neptune gryphon; do install -m 0644 "$script_dir/updater/release-trust/$scope.pem" "$target/updater/release-trust/$scope.pem"; done
   fi
 }
 
@@ -118,7 +103,6 @@ prepare_config() {
   chmod 0600 "$env_file"
   needs_generation LABORATORY_SESSION_SECRET && set_env LABORATORY_SESSION_SECRET "$(random_hex 32)"
   needs_generation UPDATER_CONTROL_TOKEN && set_env UPDATER_CONTROL_TOKEN "$(random_hex 32)"
-  copy_local_kernel_bootstrap
   prepare_updater_mount
   prepare_neptune_mounts
   install_command
@@ -151,6 +135,17 @@ install_release() {
   done
   [ -S "$socket_dir/updater.sock" ] || fail "updater socket is unavailable at $socket_dir/updater.sock"
   docker compose --env-file "$env_file" -f "$target/compose.production.yaml" config --quiet
+  docker compose --env-file "$env_file" -f "$target/compose.production.yaml" create
+  container=$(docker compose --env-file "$env_file" -f "$target/compose.production.yaml" ps -aq laboratory)
+  # A created (not started) container has no assigned Gateway yet.
+  # Network IPAM is authoritative and already exists after compose create.
+  networks=$(docker inspect --format '{{range $name, $value := .NetworkSettings.Networks}}{{$name}} {{end}}' "$container")
+  gateways=""
+  for network in $networks; do
+    gateways="$gateways$(docker network inspect --format '{{range .IPAM.Config}}{{if .Gateway}},{{.Gateway}}{{end}}{{end}}' "$network")"
+  done
+  [ -n "$gateways" ] || fail "cannot determine the host proxy address"
+  set_env LABORATORY_TRUSTED_PROXY_IPS "loopback$gateways"
   docker compose --env-file "$env_file" -f "$target/compose.production.yaml" up -d --remove-orphans
 
   port=$(get_env LABORATORY_LISTEN_PORT); port=${port:-18380}
@@ -183,7 +178,7 @@ enable_backup() {
   port=$(get_env LABORATORY_LISTEN_PORT); port=${port:-18380}
   printf '%s\n' "$enrollment_code" | updater neptune enroll --head laboratory --project laboratory --export-url "http://127.0.0.1:$port/api/internal/neptune/backup"
   unset enrollment_code
-  printf '%s\n' "Laboratory automatic backup is connected. Enable its schedule in Settings."
+  printf '%s\n' "Laboratory automatic backup is connected. Manage its schedule in Saturn Synchronization."
 }
 
 [ "$(id -u)" -eq 0 ] || fail "run as root"
@@ -210,6 +205,9 @@ case "$action" in
   status)
     validate_install
     docker compose --env-file "$env_file" -f "$target/compose.production.yaml" ps
+    port=$(get_env LABORATORY_LISTEN_PORT)
+    curl -fsS --max-time 5 "http://127.0.0.1:${port:-18380}/api/health"
+    printf '\nCore readiness checked. Verify connected agents in Settings and public TLS after nginx setup.\n'
     ;;
   backup)
     [ -f "$env_file" ] || fail "install Laboratory first"

@@ -2,8 +2,14 @@
 .secrets/*.txt
 data/runtime/
 services/api/node_modules/
+__pycache__/
+*.py[cod]
 coverage/
 *.log
 dist/
 tmp/
 release-artifacts*/
+
+# Generated CI evidence; reports are uploaded as artifacts.
+.release-evidence/
+known-problems-report.json

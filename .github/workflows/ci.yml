@@ -5,6 +5,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ["v*"]
 
 permissions:
   contents: read
@@ -29,7 +30,7 @@ jobs:
         working-directory: services/api
         run: |
           npm ci
-          npm test
+          python3 ../../scripts/known-problems-gate.py --record unit --command npm --prefix services/api test
           npm audit --omit=dev --audit-level=high
 
       - name: Syntax and release contract checks
@@ -42,44 +43,6 @@ jobs:
           sh -n install.sh
           sh -n scripts/bootstrap.sh
           bash -n scripts/build-release.sh
-          rm -rf release-artifacts-ci
-          updater_bundle="$RUNNER_TEMP/laboratory-ci-updater/updater"
-          mkdir -p "$updater_bundle/systemd"
-          install -m 0755 /dev/null "$updater_bundle/install.sh"
-          install -m 0755 /dev/null "$updater_bundle/updater-linux-amd64"
-          install -m 0644 /dev/null "$updater_bundle/systemd/updater.service"
-          updater_version="$(tr -d '[:space:]' < .release/updater.version)"
-          GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
-            IMAGE_REFERENCE="ghcr.io/${GITHUB_REPOSITORY,,}" \
-            IMAGE_DIGEST="sha256:$(printf 'a%.0s' {1..64})" \
-            UPDATER_BUNDLE_DIR="$updater_bundle" \
-            UPDATER_BUNDLE_VERSION="$updater_version" \
-            bash scripts/build-release.sh 0.0.0-ci release-artifacts-ci
-          node scripts/verify-release.mjs release-artifacts-ci/laboratory-release.json
-          node -e "const manifest=require('./release-artifacts-ci/laboratory-release.json'); if(manifest.database_schema!==6) process.exit(1)"
-          (cd release-artifacts-ci && sha256sum -c laboratory-0.0.0-ci-compose.tar.gz.sha256)
-
-      - name: Validate production Compose
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp .env.example .ci.env
-          sed -i \
-            -e 's|^KERNEL_URL=.*|KERNEL_URL=https://kernel.example.test|' \
-            -e 's|^KERNEL_SERVICE_TOKEN=.*|KERNEL_SERVICE_TOKEN=ci-kernel-service-token|' \
-            -e 's|^LABORATORY_ADMIN_PASSWORD=.*|LABORATORY_ADMIN_PASSWORD=ci-admin-password-strong|' \
-            -e 's|^LABORATORY_IMAGE=.*|LABORATORY_IMAGE=ghcr.io/example/laboratory@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|' \
-            -e 's|^LABORATORY_SESSION_SECRET=.*|LABORATORY_SESSION_SECRET=ci-session-secret-with-at-least-32-characters|' \
-            -e 's|^LABORATORY_CONTENT_GITHUB_TOKEN=.*|LABORATORY_CONTENT_GITHUB_TOKEN=ci-github-token|' \
-            -e 's|^LABORATORY_CONTENT_WEBHOOK_SECRET=.*|LABORATORY_CONTENT_WEBHOOK_SECRET=ci-webhook-secret|' \
-            -e 's|^LABORATORY_SATURN_CLIENT_TOKEN=.*|LABORATORY_SATURN_CLIENT_TOKEN=ci-saturn-client-token|' \
-            -e 's|^UPDATER_SOCKET_GID=.*|UPDATER_SOCKET_GID=1001|' \
-            -e 's|^UPDATER_CONTROL_TOKEN=.*|UPDATER_CONTROL_TOKEN=ci-updater-control-token-32-characters|' \
-            -e 's|^NEPTUNE_SOCKET_GID=.*|NEPTUNE_SOCKET_GID=1002|' \
-            .ci.env
-          docker compose --env-file .ci.env -f compose.production.yaml config --quiet
-          ! docker compose --env-file .ci.env -f compose.production.yaml config | grep -q 'CHANGE_ME'
-
       - name: Build and smoke-test hardened container
         shell: bash
         run: |
@@ -95,8 +58,7 @@ jobs:
             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
             --mount "type=volume,source=$volume,target=/app/data" \
             -p 127.0.0.1::18380 \
-            -e LABORATORY_ADMIN_USERNAME=release-operator \
-            -e LABORATORY_ADMIN_PASSWORD=release-test-password \
+            -e LABORATORY_ACCESS_KEY=release-test-access-key-32-characters \
             -e LABORATORY_SESSION_SECRET=release-test-session-secret-32-characters \
             -e LABORATORY_COOKIE_SECURE=true \
             -e LABORATORY_PUBLIC_URL=https://laboratory.example.test \
@@ -115,6 +77,24 @@ jobs:
           curl -fsS "http://127.0.0.1:$port/robots.txt" | grep -q 'Laboratory bot policy'
           curl -fsS "http://127.0.0.1:$port/sitemap-index.xml" | grep -q 'sitemaps/articles-0001.xml'
           test "$(docker inspect --format '{{.Config.User}}' "$name")" = node
+
+      - name: Verify deployment, synthetic signed bootstrap and Part 12 structure
+        run: |
+          python3 scripts/test-known-problems-gate.py
+          python3 scripts/known-problems-gate.py --record deployment --command python3 scripts/test-deployment-contract.py
+          python3 scripts/known-problems-gate.py --record bootstrap --command docker run --rm -v "$PWD:/src:ro" -w /src node:24-bookworm python3 scripts/test-bootstrap.py
+          python3 scripts/known-problems-gate.py --phase structure
+      - name: Preserve current-revision Part 12 evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: laboratory-policy-${{ github.sha }}
+          path: |
+            .release-evidence/
+            known-problems-report.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   pre-push-gate:
     name: Pre-push gate

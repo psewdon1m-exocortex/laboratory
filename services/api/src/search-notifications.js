@@ -199,7 +199,14 @@ export class SearchNotificationRuntime {
       status, now, now, job.provider, job.slug, job.event_at);
   }
 
+  async refreshConnection() {
+    if (!this.config.kernelUrl) return;
+    await this.register.refresh();
+    if (this.register.error) throw new Error("Kernel Register unavailable for search notification");
+  }
+
   async sendIndexNow(job) {
+    await this.refreshConnection();
     const url = this.articleUrl(job.slug);
     const publicUrl = new URL(this.publicUrl());
     const response = await fetch(this.config.indexNowEndpoint, {
@@ -217,6 +224,7 @@ export class SearchNotificationRuntime {
   }
 
   async sendIndexNowUrlJob(job) {
+    await this.refreshConnection();
     const url = this.articleUrl(job.slug);
     const publicUrl = new URL(this.publicUrl());
     const response = await fetch(this.config.indexNowEndpoint, {
@@ -247,6 +255,16 @@ export class SearchNotificationRuntime {
   }
 
   async sendGoogleExperiment(job) {
+    await this.refreshConnection();
+    if (this.config.kernelUrl) {
+      const raw = this.register.state.googleServiceAccountBase64;
+      if (!raw) throw new Error("Missing Google service-account binding in Kernel");
+      let credentials;
+      try { credentials = JSON.parse(Buffer.from(raw, "base64").toString("utf8")); }
+      catch { throw new Error("Invalid Google service-account binding in Kernel"); }
+      if (credentials.type !== "service_account" || !credentials.private_key || !credentials.client_email) throw new Error("Invalid Google service-account credentials");
+      this.auth = new GoogleAuth({ credentials, scopes: ["https://www.googleapis.com/auth/indexing"] });
+    }
     const client = await this.auth.getClient();
     await client.request({
       url: GOOGLE_INDEXING_ENDPOINT,

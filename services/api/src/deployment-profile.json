@@ -1,0 +1,28 @@
+{
+  "schema": "exocortex.head.profile.v1",
+  "service": "laboratory",
+  "helpers": [
+    "neptune"
+  ],
+  "keys": {
+    "repositories.laboratory.url": "github-repository",
+    "repositories.laboratory.content.url": "github-repository",
+    "repositories.laboratory.content.branch": "git-branch",
+    "services.laboratory.sni": "hostname",
+    "services.laboratory.port": "port",
+    "services.laboratory.health.path": "path",
+    "services.laboratory.health.contract": "health-contract",
+    "services.laboratory.backup.saturn_slug": "slug",
+    "services.laboratory.credentials.github_token": "secret",
+    "services.laboratory.credentials.github_webhook_secret": "secret",
+    "services.laboratory.credentials.saturn_client_token": "secret"
+  },
+  "conditionalKeys": {
+    "derivedContentEnabled": {
+      "services.laboratory.ai.gemini_api_key": "secret"
+    },
+    "googleIndexingExperimentEnabled": {
+      "services.laboratory.credentials.google_service_account_base64": "secret"
+    }
+  }
+}

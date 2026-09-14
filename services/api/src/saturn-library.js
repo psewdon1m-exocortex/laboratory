@@ -82,15 +82,21 @@ export class SaturnArticleBundleClient {
     return normalizedOrigin(this.register.state.saturnUrl || this.config.saturnUrl || "");
   }
 
+  get clientToken() { return this.config.kernelUrl ? this.register.state.saturnClientToken : this.config.saturnClientToken; }
+
   status() {
-    return { configured: Boolean(this.origin), origin: this.origin, clientTokenConfigured: Boolean(this.config.saturnClientToken), localAssetMaxBytes: this.config.localAssetMaxBytes };
+    return { configured: Boolean(this.origin), origin: this.origin, clientTokenConfigured: Boolean(this.clientToken), localAssetMaxBytes: this.config.localAssetMaxBytes };
   }
 
   async publishRemoteAssets(reference, descriptors) {
-    if (!this.config.saturnClientToken) throw new Error("LABORATORY_SATURN_CLIENT_TOKEN is required for Saturn assets above the local threshold");
+    if (this.config.kernelUrl) {
+      await this.register.refresh();
+      if (this.register.error) throw Object.assign(new Error("Kernel discovery is unavailable"), { status: 503 });
+    }
+    if (!this.clientToken) throw new Error("LABORATORY_SATURN_CLIENT_TOKEN is required for Saturn assets above the local threshold");
     const response = await this.fetchImpl(`${this.origin}/api/v1/laboratory/imports/from-share`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${this.config.saturnClientToken}`, "Content-Type": "application/json", Accept: "application/json", "User-Agent": `exocortex-laboratory/${this.config.version}` },
+      headers: { Authorization: `Bearer ${this.clientToken}`, "Content-Type": "application/json", Accept: "application/json", "User-Agent": `exocortex-laboratory/${this.config.version}` },
       body: JSON.stringify({ shareToken: reference.token, files: descriptors.map((file) => ({ resourceId: file.id, expectedSha256: file.expectedSha256, path: file.articlePath, disposition: file.articlePath.startsWith("attachments/") ? "attachment" : "inline" })) }),
       redirect: "manual",
       signal: AbortSignal.timeout(this.config.saturnTimeoutMs),
@@ -130,6 +136,10 @@ export class SaturnArticleBundleClient {
   }
 
   async fetchFolder(sharedUrl) {
+    if (this.config.kernelUrl) {
+      await this.register.refresh();
+      if (this.register.error) throw Object.assign(new Error("Kernel discovery is unavailable"), { status: 503 });
+    }
     const origin = this.origin;
     if (!origin) throw new Error("Saturn is not configured in Kernel Register");
     const reference = shareReference(sharedUrl, origin);

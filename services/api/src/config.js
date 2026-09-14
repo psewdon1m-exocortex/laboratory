@@ -1,4 +1,5 @@
 import path from "node:path";
+import metadata from "../package.json" with { type: "json" };
 import { fileURLToPath } from "node:url";
 
 const API_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -32,7 +33,7 @@ export function loadConfig(overrides = {}) {
   const serviceAccountBase64 = (process.env.LABORATORY_GOOGLE_SERVICE_ACCOUNT_BASE64 ?? "").trim();
   let googleServiceAccountCredentials = null;
   let googleServiceAccountError = "";
-  if (serviceAccountBase64) {
+  if (serviceAccountBase64 && !process.env.KERNEL_URL && !overrides.kernelUrl) {
     try {
       googleServiceAccountCredentials = JSON.parse(Buffer.from(serviceAccountBase64, "base64").toString("utf8"));
     } catch {
@@ -41,7 +42,7 @@ export function loadConfig(overrides = {}) {
   }
   const config = {
     port: integer("LABORATORY_LISTEN_PORT", 18380),
-    version: process.env.LABORATORY_VERSION ?? "0.1.0",
+    version: process.env.LABORATORY_VERSION ?? metadata.version,
     environment: process.env.NODE_ENV ?? "development",
     dataDir,
     defaultsDir: path.resolve(
@@ -50,11 +51,13 @@ export function loadConfig(overrides = {}) {
     publicDir: path.join(PROJECT_ROOT, "services", "web", "static"),
     adminUsername: process.env.LABORATORY_ADMIN_USERNAME ?? "operator",
     adminPassword: process.env.LABORATORY_ADMIN_PASSWORD ?? "laboratory-local",
+    accessKey: process.env.LABORATORY_ACCESS_KEY ?? "",
     sessionSecret:
       process.env.LABORATORY_SESSION_SECRET
       ?? "laboratory-local-session-secret-change-before-production",
     cookieSecure: boolean("LABORATORY_COOKIE_SECURE", false),
     trustProxy: boolean("LABORATORY_TRUST_PROXY", false),
+    trustedProxyAddresses: (process.env.LABORATORY_TRUSTED_PROXY_IPS || "loopback").split(",").map(value => value.trim()).filter(Boolean),
     kernelUrl: (process.env.KERNEL_URL ?? "").trim(),
     kernelServiceToken: (process.env.KERNEL_SERVICE_TOKEN ?? "").trim(),
     kernelCachePath: path.resolve(
@@ -107,6 +110,7 @@ export function loadConfig(overrides = {}) {
     maxUploadBytes: integer("LABORATORY_MAX_UPLOAD_BYTES", 120 * 1024 * 1024),
     ...overrides,
   };
+  if (!config.accessKey) config.accessKey = config.adminPassword; // Migrate existing installs without changing their key.
   validateConfig(config);
   return config;
 }
@@ -116,8 +120,8 @@ function validateConfig(config) {
   if (!/^[A-Za-z0-9._-]{3,64}$/.test(config.adminUsername)) {
     issues.push("LABORATORY_ADMIN_USERNAME must contain 3-64 safe characters");
   }
-  if (config.adminPassword.length < 12) {
-    issues.push("LABORATORY_ADMIN_PASSWORD must contain at least 12 characters");
+  if (config.accessKey.length < 12 || config.accessKey.length > 1024) {
+    issues.push("LABORATORY_ACCESS_KEY must contain 12-1024 characters");
   }
   if (config.sessionSecret.length < 32) {
     issues.push("LABORATORY_SESSION_SECRET must contain at least 32 characters");
@@ -148,7 +152,7 @@ function validateConfig(config) {
   if (config.environment === "production") {
     if (!config.cookieSecure) issues.push("LABORATORY_COOKIE_SECURE must be true in production");
     if (["laboratory-local", "change_me", "CHANGE_ME"].some((part) =>
-      config.adminPassword.includes(part))) {
+      config.accessKey.includes(part))) {
       issues.push("replace the development administrator password in production");
     }
     if (config.sessionSecret.includes("laboratory-local")) {

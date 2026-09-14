@@ -268,6 +268,7 @@ function runtimeItem(name, value) {
 
 function renderRuntime(runtime) {
   runtimeRoot.replaceChildren();
+  document.querySelector("[data-kernel-form] [name=url]").value = runtime.kernelUrl || "";
   runtimeItem("Version", runtime.version);
   runtimeItem("Kernel revision", runtime.registerRevision || runtime.registerError || "Local mode");
   runtimeItem("Repository", runtime.repositoryUrl);
@@ -285,8 +286,6 @@ function renderNeptune(status) {
   runtimeItemInto(neptuneRuntime, "State", status.active ? "Backup active" : (status.latest_run_state || "Ready"));
   runtimeItemInto(neptuneRuntime, "Last success", status.last_success_at || "Never");
   runtimeItemInto(neptuneRuntime, "Next run", status.project.next_run_at || "Not scheduled");
-  neptuneEnabled.checked = status.project.enabled;
-  neptuneInterval.value = String(status.project.interval_hours);
   neptuneResult.textContent = status.latest_error || "";
 }
 
@@ -327,7 +326,7 @@ loginForm.addEventListener("submit", async (event) => {
   try {
     const session = await api("/api/admin/login", {
       method: "POST",
-      body: JSON.stringify({ username: loginForm.username.value.trim(), password: loginForm.password.value }),
+      body: JSON.stringify({ access_key: loginForm.access_key.value }),
     });
     csrfToken = session.csrfToken;
     document.querySelector("[data-session-label]").textContent = `Signed in as ${session.username}`;
@@ -473,6 +472,7 @@ document.querySelector("[data-restore-input]").addEventListener("change", async 
   body.append("file", file);
   try {
     await mutation("/api/admin/restore", { method: "POST", body });
+    window.location.assign("/private"); return;
     await loadState();
     showToast("Backup restored");
   } catch (error) { showToast(error.message); }
@@ -503,27 +503,11 @@ document.querySelector("[data-update-check]").addEventListener("click", async ()
       if (!accepted) return;
       try {
         const job = await mutation("/api/updates/apply", { method: "POST", body: JSON.stringify({ version: result.available_version }) });
-        output.textContent = `Update job ${job.id} started.`;
+        await waitJob(job, output);
       } catch (error) { output.textContent = error.message; }
     });
     output.appendChild(install);
   } catch (error) { output.textContent = error.message; }
-});
-
-document.querySelector("[data-neptune-save]").addEventListener("click", async () => {
-  try {
-    await mutation("/api/neptune/schedule", { method: "PUT", body: JSON.stringify({ enabled: neptuneEnabled.checked, interval_hours: Number(neptuneInterval.value) }) });
-    await loadNeptune();
-    showToast("Neptune schedule saved");
-  } catch (error) { neptuneResult.textContent = error.message; }
-});
-
-document.querySelector("[data-neptune-run]").addEventListener("click", async () => {
-  try {
-    await mutation("/api/neptune/runs", { method: "POST" });
-    await loadNeptune();
-    showToast("Neptune backup accepted");
-  } catch (error) { neptuneResult.textContent = error.message; }
 });
 
 document.querySelector("[data-neptune-check]").addEventListener("click", async () => {
@@ -562,3 +546,38 @@ async function initialize() {
 }
 
 initialize();
+
+async function waitJob(started, output) {
+  if (!started.id) throw new Error("Updater omitted the operation id");
+  for (let attempt = 0; attempt < 300; attempt++) {
+    const job = await api("/api/updates/jobs/" + encodeURIComponent(started.id));
+    output.textContent = job.state + ": " + (job.message || "");
+    if (job.state === "COMPLETED") return job;
+    if (["FAILED", "ROLLED_BACK", "ROLLBACK_FAILED"].includes(job.state)) throw new Error(job.message || job.state);
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  throw new Error("Operation still running. Check status before retrying.");
+}
+document.querySelector("[data-neptune-initialize]").addEventListener("submit", async (event) => {
+  event.preventDefault(); const form = event.currentTarget, button = form.querySelector("button"); button.disabled = true;
+  try { const job = await mutation("/api/neptune/initialize", { method: "POST", body: JSON.stringify(Object.fromEntries(new FormData(form))) }); form.reset(); await waitJob(job, neptuneResult); await loadNeptune(); }
+  catch (error) { neptuneResult.textContent = error.message; } finally { button.disabled = false; }
+});
+for (const [selector, route] of [["[data-access-key-form]", "/api/admin/security/access-key"], ["[data-kernel-form]", "/api/admin/security/kernel"]]) {
+  document.querySelector(selector).addEventListener("submit", async (event) => {
+    event.preventDefault(); const form = event.currentTarget, button = form.querySelector("button"); button.disabled = true;
+    try { const result = await mutation(route, { method: "PUT", body: JSON.stringify(Object.fromEntries(new FormData(form))) }); if (result.csrfToken) csrfToken = result.csrfToken; form.reset(); await loadState(); showToast("Validated and saved"); }
+    catch (error) { showToast(error.message); } finally { button.disabled = false; }
+  });
+}
+for (const name of ["telemetry", "documentation"]) document.querySelector("[data-" + name + "]").addEventListener("click", async () => {
+  const detail = document.querySelector("[data-system-detail]");
+  try { const result = await api("/api/admin/" + name); detail.replaceChildren();
+    for (const item of result.sections || [{title:"Storage and runtime", body:JSON.stringify(result, null, 2)}]) { const h = document.createElement("h3"), p = document.createElement("pre"); h.textContent = item.title; p.textContent = item.body; detail.append(h, p); }
+  } catch (error) { detail.textContent = error.message; }
+});
+document.querySelector("[data-updater-self]").addEventListener("click", async (event) => {
+  const button = event.currentTarget; button.disabled = true;
+  try { await waitJob(await mutation("/api/updates/agent/install", {method:"POST"}), document.querySelector("[data-system-detail]")); await loadState(); }
+  catch (error) { showToast(error.message); } finally { button.disabled = false; }
+});

@@ -1,11 +1,18 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import profile from "./deployment-profile.json" with { type: "json" };
 
 const SCHEMA = "exocortex.register.snapshot.v1";
 const REVISION_PATTERN = /^register-[A-Za-z0-9-]+$/;
-const VOLT_REFERENCE = /^volt:\/\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const VOLT_REFERENCE = /^volt:\/\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[1-5]$/i;
 const GEMINI_KEY = "services.laboratory.ai.gemini_api_key";
+export const SECONDARY_SECRET_KEYS = {
+  githubToken: "services.laboratory.credentials.github_token",
+  githubWebhookSecret: "services.laboratory.credentials.github_webhook_secret",
+  saturnClientToken: "services.laboratory.credentials.saturn_client_token",
+  googleServiceAccountBase64: "services.laboratory.credentials.google_service_account_base64",
+};
 const LABORATORY_KEYS = [
   "repositories.laboratory.url",
   "repositories.neptune.url",
@@ -18,6 +25,8 @@ const LABORATORY_KEYS = [
   "services.saturn.port",
   "intervals.kernel.refresh_sec",
   GEMINI_KEY,
+  ...Object.values(SECONDARY_SECRET_KEYS),
+  ...Object.keys(profile.keys),
 ];
 
 function canonical(value) {
@@ -36,7 +45,29 @@ export function verifySnapshot(snapshot) {
   }
   const digest = crypto.createHash("sha256").update(canonical({ values: snapshot.values })).digest("hex");
   if (snapshot.checksum !== `sha256:${digest}`) throw new Error("Kernel Register checksum mismatch");
+  const check = (value) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) return Object.values(value).forEach(check);
+    if (typeof value !== "string" || !VOLT_REFERENCE.test(value)) throw new Error("Kernel snapshot contains a non-reference value");
+  };
+  check(snapshot.values);
   return snapshot;
+}
+
+export function validateProfile(config, values) {
+  const required = { ...profile.keys, ...Object.fromEntries(Object.entries(profile.conditionalKeys).filter(([flag]) => config[flag]).flatMap(([, keys]) => Object.entries(keys))) };
+  for (const [key, type] of Object.entries(required)) {
+    const value = resolve(values, key);
+    if (typeof value !== "string" || !value || value.length > 8192 || /[\r\n\0]/.test(value)) throw new Error(`Missing or invalid Register key: ${key}`);
+    let valid = true;
+    if (type === "github-repository") { const url = new URL(value); valid = url.protocol === "https:" && url.host === "github.com" && !url.username && !url.password && !url.search && !url.hash && /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/.test(url.pathname); }
+    if (type === "git-branch") valid = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/.test(value) && !value.includes("..") && !value.includes("//") && !value.includes("@{") && !value.endsWith(".") && !value.endsWith("/") && value.split("/").every((part) => !part.startsWith(".") && !part.endsWith(".lock"));
+    if (type === "hostname") valid = /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/.test(value) && !value.includes("..");
+    if (type === "port") valid = /^[0-9]{1,5}$/.test(value) && Number(value) > 0 && Number(value) <= 65535;
+    if (type === "path") valid = value.startsWith("/") && !value.startsWith("//") && !/[?#\\]/.test(value) && !value.split("/").some((p) => p === "." || p === "..");
+    if (type === "health-contract") valid = ["private-readiness", "public-readiness", "public-liveness"].includes(value);
+    if (type === "slug") valid = /^[a-z0-9][a-z0-9-]{0,63}$/.test(value);
+    if (!valid) throw new Error(`Invalid ${type} in Register key: ${key}`);
+  }
 }
 
 function resolve(values, dottedKey) {
@@ -61,6 +92,7 @@ export function applyLaboratoryRegister(config, snapshot) {
     saturnUrl: config.saturnUrl,
     geminiApiKey: "",
     geminiSecretRef: "",
+    githubToken: "", githubWebhookSecret: "", saturnClientToken: "", googleServiceAccountBase64: "",
     refreshSeconds: config.kernelRefreshSeconds,
     revision: "",
   };
@@ -102,7 +134,8 @@ export function applyLaboratoryRegister(config, snapshot) {
     ? sharedRefresh
     : config.kernelRefreshSeconds;
   const geminiApiKey = String(resolve(values, GEMINI_KEY) ?? "").trim();
-  return { repositoryUrl, neptuneRepositoryUrl, contentRepositoryUrl, contentRepositoryBranch, publicUrl, saturnUrl, geminiApiKey, geminiSecretRef: "", refreshSeconds, revision: snapshot.revision };
+  const credentials = Object.fromEntries(Object.entries(SECONDARY_SECRET_KEYS).map(([name, key]) => [name, String(resolve(values, key) ?? "")]));
+  return { repositoryUrl, neptuneRepositoryUrl, contentRepositoryUrl, contentRepositoryBranch, publicUrl, saturnUrl, geminiApiKey, geminiSecretRef: "", ...credentials, refreshSeconds, revision: snapshot.revision };
 }
 
 function withResolvedValues(snapshot, resolved) {
@@ -141,6 +174,7 @@ export async function loadKernelSnapshot(config) {
   try {
     const response = await fetch(`${config.kernelUrl.replace(/\/$/, "")}/api/v1/register/snapshot`, {
       headers,
+      redirect: "error",
       signal: AbortSignal.timeout(config.kernelTimeoutMs),
     });
     if (response.status === 304 && cached) return cached;
@@ -191,11 +225,17 @@ export class KernelRegisterRuntime {
   }
 
   async refresh() {
+    if (this.pending) return this.pending;
+    this.pending = this.refreshOnce();
+    try { return await this.pending; } finally { this.pending = null; }
+  }
+
+  async refreshOnce() {
     try {
       const snapshot = await loadKernelSnapshot(this.config);
       let resolvedSnapshot = snapshot;
       if (snapshot) {
-        const keys = LABORATORY_KEYS.filter((key) => resolve(snapshot.values, key) !== undefined);
+        const keys = [...new Set(LABORATORY_KEYS)].filter((key) => resolve(snapshot.values, key) !== undefined);
         for (const key of keys) {
           if (!VOLT_REFERENCE.test(String(resolve(snapshot.values, key)))) {
             throw new Error(`Kernel Register key ${key} must use volt://<entry-id>/<field-id>`);
@@ -204,12 +244,14 @@ export class KernelRegisterRuntime {
         resolvedSnapshot = keys.length
           ? withResolvedValues(snapshot, await resolveKernelValues(this.config, keys))
           : snapshot;
+        validateProfile(this.config, resolvedSnapshot.values);
       }
       const next = applyLaboratoryRegister(this.config, resolvedSnapshot);
       this.state = next;
       this.error = "";
     } catch (error) {
       this.error = error.message;
+      this.state = { ...this.state, geminiApiKey: "", githubToken: "", githubWebhookSecret: "", saturnClientToken: "", googleServiceAccountBase64: "" };
     }
     return this.state;
   }

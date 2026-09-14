@@ -16,16 +16,18 @@ SEO/GEO checks to intentionally public/indexable surfaces and concealment,
 crawler and probe-resistance checks to private or authenticated surfaces.
 Every area requires `PASS` evidence or a reasoned `N/A`.
 
+## Required pre-release known-problem gate
+
+Before a service-qualified release is finalized, evaluate every active ID in
+[Part 12](https://github.com/psewdon1m-exocortex/general/blob/main/PART_12_KNOWN_DEPLOYMENT_AND_OPERATIONS_PROBLEMS.md) against the exact candidate. Retain
+`known-problems-report.json` bound to the service revision, qualified tag,
+immutable central-documentation revision and catalog digest. Missing, stale,
+failed, unknown or unsupported `N/A` evidence blocks publication. The workflow enforces separate pre-signing and final phases. See [DEPLOYMENT.md](DEPLOYMENT.md) for the current release order and operator activation checks.
+
 ## Backup status
 
 Laboratory logical backup and restore follow
-[Part 03](https://github.com/psewdon1m-exocortex/general/blob/main/PART_03_BACKUP_AND_RECOVERY.md). Laboratory is not currently
-an approved Neptune consumer in Parts 09–11. Any existing
-`laboratory-install backup`, Neptune token provisioning or Laboratory-side
-schedule control is therefore a non-normative implementation divergence and
-must not be used as a supported production path until the central shared-agent
-profile is explicitly extended and accepted. A future approved integration
-must keep schedule ownership only in Saturn → Synchronization.
+[Part 03](https://github.com/psewdon1m-exocortex/general/blob/main/PART_03_BACKUP_AND_RECOVERY.md). The operator authorized the additive Laboratory + Neptune profile on 2026-09-14. Its own deployment profile validates the bindings without changing Kernel's six-service seed. Initialize Neptune from /private with a Saturn setup code; Saturn → Synchronization owns schedules and remote runs.
 
 Laboratory is the English-only publication module of Exocortex. It keeps the
 photographic, grain-driven visual language of `simple_site` while providing:
@@ -121,7 +123,7 @@ does not create a new file or user-visible folder for this operation; the asset
 record references the existing file version. The share capability itself is
 never persisted in article metadata or rendered output.
 
-Large remote files require `LABORATORY_SATURN_CLIENT_TOKEN`, issued once from
+Large remote files require the scoped `services.laboratory.credentials.saturn_client_token` Volt/Register binding, issued from
 Saturn's scoped Laboratory client API, and Saturn public Laboratory delivery
 must be enabled. A file above the threshold is rejected if Saturn does not
 provide its SHA-256; it is never silently downloaded as a fallback. Open Node
@@ -357,8 +359,8 @@ URL or branch, and a fresh process requires available Kernel and Volt:
 
 The content repository webhook endpoint is `/api/github/webhook`. Configure a
 GitHub push webhook with JSON payloads and the same secret as
-`LABORATORY_CONTENT_WEBHOOK_SECRET`. The token in
-`LABORATORY_CONTENT_GITHUB_TOKEN` needs repository Contents read/write access
+`services.laboratory.credentials.github_webhook_secret`. The token in
+`services.laboratory.credentials.github_token` needs repository Contents read/write access
 for admin writeback and automatic `_id.txt` commits. Actual values never belong
 in Kernel Register; only their Volt references do.
 
@@ -369,8 +371,7 @@ the complete source tree at the exact pushed commit SHA; a process restart
 returns interrupted work to `pending` instead of losing the accepted webhook.
 
 The production release bundles the pinned, checksum-verified Updater installer.
-Required target release contract (the current implementation gap is recorded
-in [RELEASING.md](RELEASING.md)): Laboratory release CI keeps the private
+Laboratory release CI keeps the private
 release-signing key only in GitHub
 Secrets, derives its public counterpart and embeds only the public key in the
 versioned bootstrap. On a clean host bootstrap creates
@@ -380,9 +381,7 @@ own mode-`0600` `.env`. An existing mismatching key fails closed; no `scp`,
 manual release-key fingerprint or separately downloaded public key is used.
 Bootstrap generates `LABORATORY_SESSION_SECRET`, `UPDATER_CONTROL_TOKEN` and
 socket group IDs without rotating existing values. A local
-Kernel URL and service token are copied automatically from
-`/opt/exocortex/kernel/.env`; only a remote Kernel requires those two values to
-be entered manually. The installer then installs or safely upgrades Updater and
+Kernel URL and head-scoped service token are entered into Laboratory's own .env by the operator. No neighboring environment file is read. The installer then installs or safely upgrades Updater and
 registers the head as `laboratory`. Before replacement the module creates its
 own v3 backup; Updater can restore it through the token-protected internal
 restore endpoint.
@@ -391,9 +390,8 @@ Published releases use `laboratory-vX.Y.Z` tags and a
 
 ## Production target
 
-The following is the required Part 04 procedure, not proof that the current
-release artifacts already satisfy it. The release blocker is recorded in
-[RELEASING.md](RELEASING.md); do not use this path until that gap is closed.
+Use the next qualified release described in [DEPLOYMENT.md](DEPLOYMENT.md).
+Older release assets do not acquire these source changes retroactively.
 
 Bootstrap a specific release, edit only the remaining OPERATOR INPUT values in
 the mode-0600 file, then run the installer. Do not replace generated Updater
@@ -416,11 +414,9 @@ do not add `OPERATOR_CIDR`, a VPN prerequisite or a source-IP allow-list.
 Laboratory's Access Key and bounded application session protect private content
 and administration routes.
 
-> Current implementation gap (2026-09-13): runtime configuration still uses
-> `LABORATORY_ADMIN_USERNAME` and `LABORATORY_ADMIN_PASSWORD`. The Access
-> Key-only contract above is therefore not yet implemented and blocks the next
-> production release until a separate code/configuration migration and its
-> tests are complete.
+> The next source release implements signed exact-version bootstrap, Access Key
+> sessions and typed head profiles. Previously published assets remain unchanged;
+> use this flow only after the new qualified release passes CI.
 
 The production runbook, backup drill, updater compatibility and CI contract are
 under `docs/`.

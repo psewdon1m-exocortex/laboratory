@@ -97,12 +97,15 @@ export class GitHubArticleLibrary {
     this.register = register;
     this.library = library;
     this.saturn = saturn;
+    this.library.resolveSaturnOrigin = () => this.register.state.saturnUrl || this.saturn?.status?.().origin || this.config.saturnUrl;
     this.running = false;
     this.started = false;
     this.timer = null;
   }
 
   get repositoryUrl() { return this.register.state.contentRepositoryUrl || ""; }
+  get githubToken() { return this.config.kernelUrl ? this.register.state.githubToken : this.config.githubToken; }
+  get githubWebhookSecret() { return this.config.kernelUrl ? this.register.state.githubWebhookSecret : this.config.githubWebhookSecret; }
   get branch() { return this.register.state.contentRepositoryBranch || ""; }
   get repository() { return this.repositoryUrl && this.branch ? repositoryCoordinates(this.repositoryUrl) : null; }
 
@@ -111,8 +114,8 @@ export class GitHubArticleLibrary {
     return {
       repositoryUrl: this.repositoryUrl,
       branch: this.branch,
-      tokenConfigured: Boolean(this.config.githubToken),
-      webhookConfigured: Boolean(this.config.githubWebhookSecret),
+      tokenConfigured: Boolean(this.githubToken),
+      webhookConfigured: Boolean(this.githubWebhookSecret),
       saturn: this.saturn?.status?.() || { configured: false, origin: "" },
       importJobs,
       ...this.library.getSyncState(),
@@ -130,8 +133,8 @@ export class GitHubArticleLibrary {
   stop() { this.started = false; if (this.timer) clearInterval(this.timer); }
 
   verifyWebhook(signature, rawBody) {
-    if (!this.config.githubWebhookSecret) throw Object.assign(new Error("GitHub webhook secret is not configured"), { status: 503 });
-    const digest = `sha256=${crypto.createHmac("sha256", this.config.githubWebhookSecret).update(rawBody).digest("hex")}`;
+    if (!this.githubWebhookSecret) throw Object.assign(new Error("GitHub webhook secret is not configured"), { status: 503 });
+    const digest = `sha256=${crypto.createHmac("sha256", this.githubWebhookSecret).update(rawBody).digest("hex")}`;
     if (!safeCompare(signature, digest)) throw Object.assign(new Error("Invalid GitHub webhook signature"), { status: 401 });
     return true;
   }
@@ -141,14 +144,19 @@ export class GitHubArticleLibrary {
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
       "User-Agent": `exocortex-laboratory/${this.config.version}`,
-      ...(this.config.githubToken ? { Authorization: `Bearer ${this.config.githubToken}` } : {}),
+      ...(this.githubToken ? { Authorization: `Bearer ${this.githubToken}` } : {}),
       ...extra,
     };
   }
 
   async request(apiPath, options = {}) {
+    if (this.config.kernelUrl) {
+      await this.register.refresh();
+      if (this.register.error) throw Object.assign(new Error("Kernel discovery is unavailable"), { status: 503 });
+    }
     const response = await fetch(`${this.config.githubApiUrl}${apiPath}`, {
       ...options,
+      redirect: "error",
       headers: this.headers(options.headers),
       signal: AbortSignal.timeout(this.config.githubTimeoutMs),
     });
@@ -189,7 +197,7 @@ export class GitHubArticleLibrary {
   fetchArchive(filePath, ref = this.branch) { return this.fetchFile(filePath, ref, MAX_ARTICLE_ARCHIVE_BYTES); }
 
   async putArchive(filePath, archive, message, knownSha = null) {
-    if (!this.config.githubToken) throw new Error("LABORATORY_CONTENT_GITHUB_TOKEN is required for repository writeback");
+    if (!this.githubToken) throw new Error("LABORATORY_CONTENT_GITHUB_TOKEN is required for repository writeback");
     const repository = this.repository;
     if (!repository) throw new Error("Laboratory content repository is not configured in Kernel Register");
     const sha = knownSha ?? (await this.metadata(filePath))?.sha;
@@ -201,7 +209,7 @@ export class GitHubArticleLibrary {
   }
 
   async deleteArchive(filePath, message) {
-    if (!this.config.githubToken) throw new Error("LABORATORY_CONTENT_GITHUB_TOKEN is required for repository writeback");
+    if (!this.githubToken) throw new Error("LABORATORY_CONTENT_GITHUB_TOKEN is required for repository writeback");
     const repository = this.repository;
     const metadata = await this.metadata(filePath);
     if (!metadata) return;
@@ -247,7 +255,7 @@ export class GitHubArticleLibrary {
       sourcePath: location.path,
       sourceManifest,
     });
-    if (location.sourceType === "zip" && result.assignedId && this.config.githubToken) {
+    if (location.sourceType === "zip" && result.assignedId && this.githubToken) {
       await this.putArchive(location.path, result.archive, `laboratory: assign ${result.article.internalId}`, remote.sha);
     }
     return result;
@@ -381,7 +389,7 @@ export class GitHubArticleLibrary {
   }
 
   async writeArticle(result) {
-    if (!this.config.githubToken) return { written: false, reason: "GitHub token is not configured" };
+    if (!this.githubToken) return { written: false, reason: "GitHub token is not configured" };
     const article = result.article;
     try {
       const directory = article.status === "published" ? "published" : "unpublished";
@@ -400,7 +408,7 @@ export class GitHubArticleLibrary {
 
   async deleteArticle(article) {
     if (!article?.sourcePath) return { written: false, reason: "Article is not linked to a repository archive" };
-    if (!this.config.githubToken) return { written: false, reason: "GitHub token is not configured" };
+    if (!this.githubToken) return { written: false, reason: "GitHub token is not configured" };
     await this.deleteArchive(article.sourcePath, `laboratory: delete ${article.internalId}`);
     return { written: true, path: article.sourcePath };
   }

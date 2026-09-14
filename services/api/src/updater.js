@@ -66,7 +66,7 @@ export class UpdaterClient {
   }
 
   job(id) {
-    return this.request("GET", `/v1/jobs/${encodeURIComponent(id)}`);
+    return this.request("GET", `/v1/jobs/${encodeURIComponent(id)}`, null, true);
   }
 
   rollback(id) {
@@ -78,6 +78,23 @@ export class UpdaterClient {
       head_id: this.headId,
       version,
     }, true, 300_000);
+  }
+
+  checkNeptune(currentVersion) {
+    return this.request("POST", "/v1/components/neptune-linux/check", {
+      head_id: this.headId, current_version: currentVersion,
+    }, true, 30_000);
+  }
+
+  initializeNeptune(enrollmentCode, exportUrl) {
+    return this.request("POST", "/v1/components/neptune-linux/initialize", {
+      request_id: crypto.randomUUID(), head_id: this.headId, project_id: "laboratory",
+      enrollment_code: enrollmentCode, export_url: exportUrl,
+    }, true, 30_000);
+  }
+
+  updateSelf() {
+    return this.request("POST", "/v1/lifecycle/updater-self-update", { head_id: this.headId }, true, 30_000);
   }
 }
 

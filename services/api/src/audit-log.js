@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { zipSync, strToU8 } from "fflate";
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const RETAINED_FILES = 5;
@@ -44,6 +45,11 @@ export class AuditLog {
   }
 
   async rotateIfNeeded() {
+    for (let index = 0; index <= RETAINED_FILES; index++) {
+      const file = index ? `${this.filename}.${index}` : this.filename;
+      try { if ((await fs.stat(file)).mtimeMs < Date.now() - 30 * 86400_000) await fs.rm(file); }
+      catch (error) { if (error.code !== "ENOENT") throw error; }
+    }
     let size = 0;
     try { size = (await fs.stat(this.filename)).size; } catch (error) { if (error.code !== "ENOENT") throw error; }
     if (size < MAX_FILE_BYTES) return;
@@ -55,8 +61,14 @@ export class AuditLog {
     await fs.rename(this.filename, `${this.filename}.1`);
   }
 
-  async exportJsonl() {
-    await this.queue;
+  exportJsonl() {
+    const result = this.queue.then(() => this.readJsonl());
+    this.queue = result.then(() => {}, () => {});
+    return result;
+  }
+
+  async readJsonl() {
+    await this.rotateIfNeeded();
     const chunks = [];
     for (let index = RETAINED_FILES; index >= 1; index -= 1) {
       try { chunks.push(await fs.readFile(`${this.filename}.${index}`, "utf8")); }
@@ -64,11 +76,35 @@ export class AuditLog {
     }
     try { chunks.push(await fs.readFile(this.filename, "utf8")); }
     catch (error) { if (error.code !== "ENOENT") throw error; }
-    return chunks.join("");
+    return chunks.join("").trim().split("\n").filter(Boolean).slice(-10_000).join("\n") + (chunks.length ? "\n" : "");
   }
 
-  async list(limit = 200) {
-    const lines = (await this.exportJsonl()).trim().split("\n").filter(Boolean).slice(-Math.max(1, Math.min(1000, limit))).reverse();
+  async exportZip() {
+    const jsonl = await this.exportJsonl();
+    const bytes = strToU8(jsonl);
+    return Buffer.from(zipSync({
+      "events.jsonl": bytes,
+      "manifest.json": strToU8(JSON.stringify({ schema: "exocortex.log-export.v1", service: "laboratory", created_at: new Date().toISOString(), count: jsonl.split("\n").filter(Boolean).length, sha256: crypto.createHash("sha256").update(bytes).digest("hex"), retention: { days: 30, entries: 10000, max_file_bytes: MAX_FILE_BYTES, max_directory_bytes: (RETAINED_FILES + 1) * MAX_FILE_BYTES } })),
+      "errors.json": strToU8("[]\n"),
+      "README.txt": strToU8("Bounded Laboratory audit export. Request bodies and credentials are omitted. Network identifiers are pseudonymized. Times are UTC.\n"),
+    }, { level: 6 }));
+  }
+
+  list(limit = 200) {
+    const result = this.queue.then(() => this.readList(limit));
+    this.queue = result.then(() => {}, () => {});
+    return result;
+  }
+
+  async readList(limit) {
+    await this.rotateIfNeeded();
+    const maximum = Math.max(1, Math.min(1000, Number.isFinite(limit) ? limit : 200));
+    let recent = [];
+    for (let index = 0; index <= RETAINED_FILES && recent.length < maximum; index++) {
+      try { const text = await fs.readFile(index ? `${this.filename}.${index}` : this.filename, "utf8"); recent = [...text.trim().split("\n").filter(Boolean), ...recent].slice(-maximum); }
+      catch (error) { if (error.code !== "ENOENT") throw error; }
+    }
+    const lines = recent.reverse();
     return lines.map((line) => JSON.parse(line));
   }
 }

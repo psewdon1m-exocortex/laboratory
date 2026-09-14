@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ArticleLibrary } from "./article-library.js";
+import { OperatorSecurity } from "./auth.js";
 
 const DEFAULT_SETTINGS = {
   siteTitle: "Laboratory",
@@ -17,7 +18,7 @@ const DEFAULT_SETTINGS = {
   noiseGrain: "55",
 };
 
-export const DATABASE_SCHEMA_VERSION = 6;
+export const DATABASE_SCHEMA_VERSION = 7;
 
 export const UPLOAD_SLOTS = {
   heroImage: { kind: "image", maxBytes: 25 * 1024 * 1024 },
@@ -72,6 +73,7 @@ function validateText(value, name, maximum) {
 
 function validateSettings(input) {
   const noise = input.settings?.noise ?? {};
+  if (typeof noise.enabled !== "boolean") throw new Error("Noise enabled must be a boolean");
   const intensity = Number(noise.intensity);
   const grain = Number(noise.grain);
   if (!Number.isFinite(intensity) || intensity < 0 || intensity > 100) {
@@ -162,6 +164,9 @@ export class LaboratoryStore {
     this.db = new DatabaseSync(this.databasePath);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
+    this.security = new OperatorSecurity(this.db, this.config);
+    this.db.exec("CREATE TABLE IF NOT EXISTS restore_commits (operation TEXT PRIMARY KEY)");
+    await this.recoverInterruptedRestore();
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
@@ -398,6 +403,7 @@ export class LaboratoryStore {
       contentEvents: this.db.prepare("SELECT * FROM public_content_events ORDER BY id").all(),
       library: this.library.exportSnapshot(),
       notifications: this.exportNotificationSnapshot(),
+      recovery: { version: 1, security: this.security.snapshot(), credentialsPolicy: "retain-target-enrollment", sessionsPolicy: "revoke-all" },
     };
   }
 
@@ -418,10 +424,15 @@ export class LaboratoryStore {
 
   async backupFiles(snapshot) {
     const files = {};
+    const budget = { remaining: 512 * 1024 * 1024 };
     for (const asset of snapshot.assets) {
-      files[`assets/${asset.slot}/${asset.filename}`] = await fs.readFile(path.join(this.uploadsDir, asset.slot, asset.filename));
+      const filename = path.join(this.uploadsDir, asset.slot, asset.filename);
+      const size = (await fs.stat(filename)).size;
+      if (size > 128 * 1024 * 1024 || size > budget.remaining) throw new Error("Backup file budget exceeded before allocation");
+      budget.remaining -= size;
+      files[`assets/${asset.slot}/${asset.filename}`] = await fs.readFile(filename);
     }
-    Object.assign(files, await this.library.backupFiles(snapshot.library));
+    Object.assign(files, await this.library.backupFiles(snapshot.library, budget));
     return files;
   }
 
@@ -468,6 +479,13 @@ export class LaboratoryStore {
     if (!Array.isArray(snapshot.settings) || !Array.isArray(snapshot.assets)) {
       throw new Error("Invalid Laboratory backup structure");
     }
+    const names = new Set();
+    for (const item of snapshot.settings) {
+      if (!Object.hasOwn(DEFAULT_SETTINGS, item?.key) || names.has(item.key) || typeof item.value !== "string") throw new Error("Invalid or duplicate backup setting");
+      names.add(item.key);
+      if (item.key === "noiseEnabled" && !["true", "false"].includes(item.value)) throw new Error("Invalid backup boolean setting");
+    }
+    validateSettings(normalizeSettings(snapshot.settings));
     const operation = crypto.randomBytes(8).toString("hex");
     const stagingRoot = path.join(this.config.dataDir, `.restore-stage-${operation}`);
     const stagedUploads = path.join(stagingRoot, "uploads");
@@ -487,6 +505,8 @@ export class LaboratoryStore {
         const member = `assets/${asset.slot}/${asset.filename}`;
         const data = files[member];
         if (!data || data.length !== asset.size || sha256(data) !== asset.sha256) throw new Error(`Asset checksum mismatch: ${asset.slot}`);
+        const validated = validateUpload(asset.slot, { buffer: data });
+        if (asset.mime !== validated.mime) throw new Error(`Asset MIME mismatch: ${asset.slot}`);
         expectedFiles.add(member);
         await atomicWrite(path.join(stagedUploads, asset.slot, asset.filename), data);
       }
@@ -510,6 +530,7 @@ export class LaboratoryStore {
       let oldTreeMoved = false;
       let newTreeMoved = false;
       try {
+        await atomicWrite(path.join(this.config.dataDir, "restore-journal.json"), Buffer.from(JSON.stringify({ operation })));
         await fs.rename(this.uploadsDir, rollbackUploads);
         oldTreeMoved = true;
         await fs.rename(stagedUploads, this.uploadsDir);
@@ -540,12 +561,15 @@ export class LaboratoryStore {
           this.library.restoreDatabase(snapshot.library);
         }
         this.restoreNotificationDatabase(snapshot);
+        if (snapshot.recovery && snapshot.recovery.version !== 1) throw new Error("Unsupported recovery metadata");
+        this.security.restore(snapshot.recovery?.security);
         const restoredScope = this.db.prepare("SELECT 1 FROM public_content_events WHERE scope = ? LIMIT 1");
         for (const scope of ["site", "home", "about", "journal"]) {
           if (!restoredScope.get(scope)) this.recordContentEvent({ eventType: "RestoreCompleted", scope });
         }
         const foreignKeyFailures = this.db.prepare("PRAGMA foreign_key_check").all();
         if (foreignKeyFailures.length) throw new Error("Restored database violates foreign-key invariants");
+        this.db.prepare("INSERT INTO restore_commits(operation) VALUES (?)").run(operation);
         this.db.exec("COMMIT");
       } catch (error) {
         try { this.db.exec("ROLLBACK"); } catch {}
@@ -555,9 +579,12 @@ export class LaboratoryStore {
         if (oldTreeMoved) {
           await fs.rename(rollbackUploads, this.uploadsDir);
         }
+        await fs.rm(path.join(this.config.dataDir, "restore-journal.json"), { force: true });
         throw error;
       }
       await fs.rm(rollbackUploads, { recursive: true, force: true });
+      await fs.rm(path.join(this.config.dataDir, "restore-journal.json"), { force: true });
+      this.db.prepare("DELETE FROM restore_commits WHERE operation=?").run(operation);
       if (snapshot.schema === "exocortex.laboratory.backup.v1") await this.library.migrateLegacyArticles();
       this.db.exec("PRAGMA optimize");
       return { settings: snapshot.settings.length, assets: snapshot.assets.length, articles: snapshot.library?.articles?.length ?? snapshot.articles?.length ?? 0 };
@@ -570,5 +597,26 @@ export class LaboratoryStore {
 
   close() {
     this.db?.close();
+  }
+
+  async recoverInterruptedRestore() {
+    const journal = path.join(this.config.dataDir, "restore-journal.json");
+    let record;
+    try { record = JSON.parse(await fs.readFile(journal, "utf8")); }
+    catch (error) { if (error.code === "ENOENT") return; throw error; }
+    if (!/^[a-f0-9]{16}$/.test(record.operation || "")) throw new Error("Invalid restore recovery journal");
+    const rollback = path.join(this.config.dataDir, `.restore-rollback-${record.operation}`);
+    const stage = path.join(this.config.dataDir, `.restore-stage-${record.operation}`);
+    const committed = this.db.prepare("SELECT 1 FROM restore_commits WHERE operation=?").get(record.operation);
+    let oldTreeExists = false;
+    try { oldTreeExists = (await fs.lstat(rollback)).isDirectory(); } catch (error) { if (error.code !== "ENOENT") throw error; }
+    if (!committed && oldTreeExists) {
+      await fs.rm(this.uploadsDir, { recursive: true, force: true });
+      await fs.rename(rollback, this.uploadsDir);
+    }
+    if (committed) await fs.rm(rollback, { recursive: true, force: true });
+    await fs.rm(stage, { recursive: true, force: true });
+    await fs.rm(journal, { force: true });
+    this.db.prepare("DELETE FROM restore_commits WHERE operation=?").run(record.operation);
   }
 }

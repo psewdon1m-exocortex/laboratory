@@ -4,18 +4,16 @@ This document specializes [Part 05 — CI/CD and release
 security](https://github.com/psewdon1m-exocortex/general/blob/main/PART_05_CI_RELEASES_AND_LOCAL_UPDATES.md) for this service. If
 the two documents differ, Part 05 is authoritative.
 
+The [Part 12 known-problem gate](https://github.com/psewdon1m-exocortex/general/blob/main/PART_12_KNOWN_DEPLOYMENT_AND_OPERATIONS_PROBLEMS.md) is also mandatory for every qualified release. Its revision-bound
+`known-problems-report.json` is release evidence, not an optional checklist.
+
 Laboratory follows SemVer from the initial `0.0.1`. A plain tag such as
 `v0.0.1` invokes verification-only CI and must not publish or mutate a release;
 only `laboratory-vMAJOR.MINOR.PATCH` may invoke the release workflow.
 
-> Current implementation gap (2026-09-13): `ci.yml` does not yet listen to
-> plain `v*` tags. The release workflow also does not yet sign the manifest or
-> build an exact-version bootstrap with the embedded public key described
-> below. Runtime authentication also still uses username/password instead of
-> the required Access Key-only model, and current Neptune integration has no
-> approved Laboratory profile in Parts 09–11. These material Part 04/05/07/09
-> divergences block the next release until a separate CI/code change is
-> implemented and verified.
+> The next source release implements signed exact-version bootstrap, Access Key
+> sessions and typed head profiles. Previously published assets remain unchanged;
+> use this flow only after the new qualified release passes CI.
 
 1. Update the application version and review migrations/backups.
 2. Merge a pull request with a green `Laboratory CI / verify` check.

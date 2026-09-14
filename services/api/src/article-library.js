@@ -307,8 +307,26 @@ export class ArticleLibrary {
       storageBackend: row.storage_backend || "local",
       ...(row.remote_asset_id ? { remoteAssetId: row.remote_asset_id } : {}),
       ...(row.remote_version_id ? { remoteVersionId: row.remote_version_id } : {}),
-      ...(row.remote_url ? { publicUrl: row.remote_url } : {}),
+      ...(row.remote_url ? { publicUrl: this.remoteAssetUrl(row) } : {}),
     }));
+  }
+
+  remoteAssetUrl(file) {
+    const origin = this.resolveSaturnOrigin?.() || this.config.saturnUrl;
+    if (!origin) throw Object.assign(new Error("Saturn origin is unavailable in Kernel Register"), { status: 503 });
+    const canonical = new URL(origin);
+    const stored = new URL(file.remote_url);
+    if (canonical.protocol !== "https:" || canonical.username || canonical.password) throw new Error("Invalid canonical Saturn origin");
+    // Keep stable asset/version paths, never persist or reuse a former host as authority.
+    return new URL(stored.pathname + stored.search, canonical.origin).href;
+  }
+
+  canReadStoragePath(storagePath, authenticated = false) {
+    if (!safeStoragePath(storagePath)) return false;
+    const file = this.db.prepare(`SELECT a.source_status, a.published_revision_id, f.revision_id
+      FROM article_files f JOIN article_revisions r ON r.id=f.revision_id
+      JOIN library_articles a ON a.id=r.article_id WHERE f.storage_path=?`).get(storagePath);
+    return Boolean(file && (authenticated || (file.source_status === "published" && file.published_revision_id === file.revision_id)));
   }
 
   async revisionFilesWithBytes(revisionId) {
@@ -579,7 +597,7 @@ export class ArticleLibrary {
     const file = this.db.prepare("SELECT * FROM article_files WHERE revision_id = ? AND path = ?").get(revision.id, String(filePath).replaceAll("\\", "/"));
     if (!file) return null;
     const publicArticle = { internalId: article.internal_id, slug: article.slug, title: article.title };
-    if ((file.storage_backend || "local") === "saturn") return { remoteUrl: file.remote_url, file, article: publicArticle };
+    if ((file.storage_backend || "local") === "saturn") return { remoteUrl: this.remoteAssetUrl(file), file, article: publicArticle };
     const bytes = await fs.readFile(path.join(this.rootDir, file.storage_path));
     if (workflow) return { project: parseOpenNodeProject(bytes, file.path), file, article: publicArticle };
     return { bytes, file, article: publicArticle };
@@ -835,18 +853,24 @@ export class ArticleLibrary {
     };
   }
 
-  async backupFiles(snapshot) {
+  async backupFiles(snapshot, budget = { remaining: 512 * 1024 * 1024 }) {
     const result = {};
+    const read = async filename => {
+      const size = (await fs.stat(filename)).size;
+      if (size > 128 * 1024 * 1024 || size > budget.remaining) throw new Error("Backup file budget exceeded before allocation");
+      budget.remaining -= size;
+      return fs.readFile(filename);
+    };
     for (const file of snapshot.files) {
       if ((file.storage_backend || "local") === "saturn") continue;
       if (!safeStoragePath(file.storage_path)) throw new Error("Invalid article storage path");
-      result[`library/${file.storage_path}`] = await fs.readFile(path.join(this.rootDir, file.storage_path));
+      result[`library/${file.storage_path}`] = await read(path.join(this.rootDir, file.storage_path));
     }
     for (const generation of snapshot.derivativeGenerations || []) {
       if (!safeStoragePath(generation.artifact_root)) throw new Error("Invalid derivative artifact path");
       for (const filename of ["abstract.md", "transcript.md", "evidence.json", "generation-manifest.json"]) {
         const storagePath = path.posix.join(generation.artifact_root, filename);
-        try { result[`library/${storagePath}`] = await fs.readFile(path.join(this.rootDir, storagePath)); }
+        try { result[`library/${storagePath}`] = await read(path.join(this.rootDir, storagePath)); }
         catch (error) { if (error.code !== "ENOENT") throw error; }
       }
     }

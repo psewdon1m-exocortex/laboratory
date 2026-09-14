@@ -16,12 +16,12 @@ New backups use `exocortex.laboratory.backup.v3` inside `exocortex.laboratory.ba
 
 The manifest inventories every member with its uncompressed size and SHA-256. The logical data member also records row counts per authoritative collection.
 
-Secrets, session cookies, `.env`, Kernel Register cache, the rebuildable FTS evidence index, transient restore staging, pre-restore checkpoints and audit logs are intentionally excluded. Audit records have a separate NDJSON export in `/private`; they must be shipped or archived by the operator if longer retention is required.
+The Access Key verifier and session generation are included as recovery metadata. Restore revokes existing sessions and retains the target machine enrollment. Plaintext secrets, session cookies, `.env`, Kernel Register cache, the rebuildable FTS evidence index, transient restore staging, pre-restore checkpoints and audit logs are intentionally excluded. Audit records have a separate manifest/checksum ZIP export in `/private`; they must be shipped or archived by the operator if longer retention is required.
 
 ## Safety limits and validation
 
 The complete ZIP is limited to 128 MiB by the retained Updater transfer
-contract used by the current 0.4.3+ deployment profile. Preflight parses the
+contract used by the current 0.4.6+ deployment profile. Preflight parses the
 ZIP central directory before decompression and rejects ZIP64/multi-disk
 archives, encryption, unsupported compression, more than 10,000 members,
 members over 128 MiB, expanded archives over 512 MiB, excessive compression
@@ -42,3 +42,5 @@ Every restore first writes a mode `0600` pre-restore checkpoint under `data/rest
 6. Confirm `/api/health`, About, Journal, article media and updater rollback restore.
 
 The automated suite covers steps 2–5 at the storage boundary. A production restore drill should be performed at least once per release train and after schema changes.
+
+A persistent restore journal and SQLite commit marker reconcile interrupted file switches at startup. Large ZIP compression and validation run outside the main request loop. See [the deployment runbook](../DEPLOYMENT.md) for remote Saturn assets and post-restore acceptance.

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import { strFromU8, unzipSync, zipSync } from "fflate";
+import { strFromU8, unzipSync, zip } from "fflate";
+import { Worker } from "node:worker_threads";
 
 const MANIFEST_NAME = "manifest.json";
 const DATA_NAME = "laboratory-backup.json";
@@ -107,10 +108,22 @@ function inspectZip(buffer) {
   return entries;
 }
 
-export async function createBackup(store, version) {
+export async function createBackup(store, version, attempt = 0) {
+  if (store.restoreInProgress) throw new Error("Cannot export during restore");
+  const epoch = store.restoreEpoch;
+  const changes = store.db.prepare("SELECT total_changes() AS count").get().count;
   const snapshot = store.exportSnapshot();
   const data = Buffer.from(JSON.stringify(snapshot, null, 2));
-  const files = await store.backupFiles(snapshot);
+  let files;
+  try { files = await store.backupFiles(snapshot); }
+  catch (error) {
+    if (attempt < 2 && !store.restoreInProgress && changes !== store.db.prepare("SELECT total_changes() AS count").get().count) return createBackup(store, version, attempt + 1);
+    throw error;
+  }
+  if (epoch !== store.restoreEpoch || changes !== store.db.prepare("SELECT total_changes() AS count").get().count) {
+    if (attempt < 2) return createBackup(store, version, attempt + 1);
+    throw new Error("Content changed during export; retry when writes settle");
+  }
   const members = [{ name: DATA_NAME, size: data.length, sha256: sha256(data), records: backupRecordCounts(snapshot) }];
   for (const [name, value] of Object.entries(files).sort(([left], [right]) => left.localeCompare(right))) {
     if (!safeMemberName(name)) throw new Error(`Unsafe backup member: ${name}`);
@@ -127,16 +140,30 @@ export async function createBackup(store, version) {
     members,
   }, null, 2));
   const payload = { [MANIFEST_NAME]: new Uint8Array(manifest), [DATA_NAME]: new Uint8Array(data), ...files };
-  const archive = Buffer.from(zipSync(payload, { level: 6 }));
+  const archive = Buffer.from(await new Promise((resolve, reject) => zip(payload, { level: 6 }, (error, data) => error ? reject(error) : resolve(data))));
   if (archive.length > MAX_ARCHIVE_BYTES) throw new Error("Laboratory backup exceeds the updater 128 MiB limit");
   inspectZip(archive);
   return archive;
 }
 
+export function parseBackupAsync(buffer) {
+  if (!buffer?.length || buffer.length > MAX_ARCHIVE_BYTES) return Promise.reject(new Error("Backup archive is empty or exceeds 128 MiB"));
+  const input = Uint8Array.from(buffer);
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./backup-worker.js", import.meta.url), { workerData: input, transferList: [input.buffer], execArgv: [], resourceLimits: { maxOldGenerationSizeMb: 256 } });
+    worker.once("message", message => {
+      if (message.error) reject(new Error(message.error));
+      else { for (const [name, bytes] of Object.entries(message.result.files)) message.result.files[name] = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength); resolve(message.result); }
+    });
+    worker.once("error", reject);
+    worker.once("exit", code => { if (code) reject(new Error("Backup worker exceeded its resource budget")); });
+  });
+}
+
 export function parseBackup(buffer) {
-  const archive = Buffer.from(buffer || []);
+  const archive = buffer instanceof Uint8Array ? Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength) : Buffer.from(buffer || []);
   const centralEntries = inspectZip(archive);
-  const entries = unzipSync(new Uint8Array(archive));
+  const entries = unzipSync(new Uint8Array(archive.buffer, archive.byteOffset, archive.byteLength));
   const names = Object.keys(entries);
   if (names.length !== centralEntries.length || !entries[MANIFEST_NAME] || !entries[DATA_NAME]) {
     throw new Error("Backup archive is incomplete");
@@ -162,7 +189,7 @@ export function parseBackup(buffer) {
       throw new Error("Backup members do not match the manifest");
     }
     for (const name of actualNames) {
-      const bytes = Buffer.from(entries[name]);
+      const bytes = Buffer.from(entries[name].buffer, entries[name].byteOffset, entries[name].byteLength);
       const member = expected.get(name);
       if (bytes.length !== member.size || sha256(bytes) !== member.sha256) {
         throw new Error(`Backup member checksum mismatch: ${name}`);
@@ -174,7 +201,7 @@ export function parseBackup(buffer) {
   const snapshot = JSON.parse(strFromU8(entries[DATA_NAME]));
   const files = {};
   for (const [name, value] of Object.entries(entries)) {
-    if (name !== MANIFEST_NAME && name !== DATA_NAME) files[name] = Buffer.from(value);
+    if (name !== MANIFEST_NAME && name !== DATA_NAME) files[name] = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
   }
   return { manifest, snapshot, files };
 }

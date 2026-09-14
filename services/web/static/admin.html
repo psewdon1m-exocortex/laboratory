@@ -25,8 +25,7 @@
       <section class="admin-card admin-login" data-login-card>
         <h2>Sign in</h2>
         <form class="admin-form" data-login-form>
-          <label>Username <input name="username" autocomplete="username" required /></label>
-          <label>Password <input name="password" type="password" autocomplete="current-password" required /></label>
+          <label>Access Key <input name="access_key" type="password" autocomplete="current-password" required /></label>
           <button type="submit">Sign in</button>
         </form>
       </section>
@@ -133,10 +132,8 @@
           </div>
           <dl class="runtime-grid" data-neptune-runtime></dl>
           <div class="system-actions">
-            <label><input type="checkbox" data-neptune-enabled /> Automatic backup</label>
-            <label>Interval, hours <input type="number" min="1" max="8760" value="24" data-neptune-interval /></label>
-            <button type="button" class="button-quiet" data-neptune-save>Save schedule</button>
-            <button type="button" class="button-quiet" data-neptune-run>Back up to Saturn now</button>
+            <p>Schedules and remote backup runs are managed in Saturn → Synchronization.</p>
+            <form data-neptune-initialize><label>Saturn setup code<input name="enrollment_code" required minlength="32" maxlength="32" autocomplete="off" /></label><button type="submit">Initialize Neptune</button></form>
             <button type="button" class="button-quiet" data-neptune-check>Check Neptune update</button>
             <button type="button" data-neptune-install hidden>Install Neptune</button>
           </div>
@@ -146,6 +143,9 @@
         <section class="admin-card section-card">
           <div class="section-heading"><h2>System</h2><p>Kernel Registry, local Updater and recovery.</p></div>
           <dl class="runtime-grid" data-runtime></dl>
+          <form data-access-key-form><h3>Access Key</h3><label>Current Access Key<input name="current_access_key" type="password" required autocomplete="current-password" /></label><label>New Access Key<input name="new_access_key" type="password" minlength="12" required autocomplete="new-password" /></label><label>Repeat Access Key<input name="confirm_access_key" type="password" minlength="12" required autocomplete="new-password" /></label><button type="submit">Change Access Key</button></form>
+          <form data-kernel-form><h3>Connection with Kernel</h3><label>Kernel URL<input name="url" type="url" required /></label><label>New token (leave empty to retain)<input name="token" type="password" autocomplete="new-password" /></label><label>Repeat token<input name="confirm_token" type="password" autocomplete="new-password" /></label><button type="submit">Validate and save connection</button></form>
+          <div class="system-actions"><button type="button" data-telemetry>Refresh telemetry</button><button type="button" data-documentation>Documentation</button><button type="button" data-updater-self>Update Updater</button></div><div data-system-detail></div>
           <div class="system-actions">
             <a class="button-link" href="/api/admin/audit/export">Download audit log</a>
             <button type="button" class="button-quiet" data-update-check>Check for update</button>
