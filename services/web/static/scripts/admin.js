@@ -653,7 +653,16 @@ document.querySelector("[data-update-check]").addEventListener("click", async ()
       try {
         const job = await mutation("/api/updates/apply", { method: "POST", body: JSON.stringify({ version: result.available_version }) });
         await waitJob(job, output);
-      } catch (error) { output.textContent = error.message; }
+      } catch (error) {
+        if (!isRestartWindowError(error)) {
+          output.textContent = error.message;
+          return;
+        }
+        try {
+          await waitForLaboratoryRestart(output);
+          window.location.reload();
+        } catch (restartError) { output.textContent = restartError.message; }
+      }
     });
     output.appendChild(install);
   } catch (error) { output.textContent = error.message; }
@@ -701,14 +710,52 @@ async function initialize() {
 
 initialize();
 
+const jobPollDelay = 2000;
+
+function isRestartWindowError(error) {
+  return /(?:502\s+Bad Gateway|503\s+Service Unavailable|504\s+Gateway|Failed to fetch|NetworkError|Load failed)/i
+    .test(String(error?.message || error || ""));
+}
+
+function waitForPoll() {
+  return new Promise((resolve) => setTimeout(resolve, jobPollDelay));
+}
+
+async function waitForLaboratoryRestart(output) {
+  let consecutiveHealthyResponses = 0;
+  for (let attempt = 0; attempt < 90; attempt++) {
+    output.textContent = "Laboratory is restarting. Waiting for it to return...";
+    try {
+      const response = await fetch("/api/live", { cache: "no-store", credentials: "same-origin" });
+      consecutiveHealthyResponses = response.ok ? consecutiveHealthyResponses + 1 : 0;
+      if (consecutiveHealthyResponses >= 2) return;
+    } catch {
+      consecutiveHealthyResponses = 0;
+    }
+    await waitForPoll();
+  }
+  throw new Error("Laboratory did not return after the update. Check the Updater job and service logs.");
+}
+
 async function waitJob(started, output) {
   if (!started.id) throw new Error("Updater omitted the operation id");
+  let restartWindowFailures = 0;
   for (let attempt = 0; attempt < 300; attempt++) {
-    const job = await api("/api/updates/jobs/" + encodeURIComponent(started.id));
+    let job;
+    try {
+      job = await api("/api/updates/jobs/" + encodeURIComponent(started.id));
+      restartWindowFailures = 0;
+    } catch (error) {
+      if (!isRestartWindowError(error) || restartWindowFailures >= 90) throw error;
+      restartWindowFailures += 1;
+      output.textContent = "Laboratory is restarting. Update monitoring will resume automatically...";
+      await waitForPoll();
+      continue;
+    }
     output.textContent = job.state + ": " + (job.message || "");
     if (job.state === "COMPLETED") return job;
     if (["FAILED", "ROLLED_BACK", "ROLLBACK_FAILED"].includes(job.state)) throw new Error(job.message || job.state);
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await waitForPoll();
   }
   throw new Error("Operation still running. Check status before retrying.");
 }
