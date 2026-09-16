@@ -1151,7 +1151,7 @@ a {
   border-top: 1px solid var(--line);
   padding: 10px 0 0;
   color: var(--fg);
-  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  background: transparent;
   font-size: 0.75rem;
   line-height: 1.4;
   backdrop-filter: blur(12px);

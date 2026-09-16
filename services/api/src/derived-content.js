@@ -302,14 +302,17 @@ export class DerivedContentRuntime {
   }
 
   regenerate(reference) {
+    if (!this.config.derivedContentEnabled) throw new Error("AI pipeline is disabled in settings");
+    const credential = this.credential();
+    if (!credential.key) throw new Error(credential.error || "Gemini API key is unavailable in Kernel Register");
     const row = this.db.prepare(`
-      SELECT a.published_revision_id AS revision_id
+      SELECT a.current_revision_id AS revision_id
       FROM library_articles a
       LEFT JOIN article_slug_aliases aliases ON aliases.article_id = a.id
       WHERE a.internal_id = ? OR a.slug = ? OR aliases.slug = ?
       LIMIT 1
     `).get(reference, reference, reference);
-    if (!row?.revision_id) throw new Error("Published article not found");
+    if (!row?.revision_id) throw new Error("Article not found");
     const now = new Date().toISOString();
     this.db.prepare(`
       INSERT INTO article_generation_jobs(revision_id, status, attempts, last_error, usage_json, next_attempt_at, created_at, updated_at)
@@ -330,7 +333,7 @@ export class DerivedContentRuntime {
       JOIN library_articles a ON a.id = r.article_id
       JOIN article_files f ON f.revision_id = r.id AND f.path = r.main_path
       WHERE j.status IN ('pending', 'failed') AND j.attempts < ? AND j.next_attempt_at <= ?
-        AND a.published_revision_id = r.id AND a.source_status = 'published'
+        AND a.current_revision_id = r.id
       ORDER BY j.created_at, j.revision_id
       LIMIT 1
     `).get(this.config.derivedContentMaxAttempts, new Date().toISOString());

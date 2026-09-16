@@ -21,6 +21,7 @@ const articleFiles = document.querySelector("[data-article-files]");
 const articleRevisions = document.querySelector("[data-article-revisions]");
 const editorCollapse = document.querySelector("[data-editor-collapse]");
 const editorDelete = document.querySelector("[data-editor-delete]");
+const editorAi = document.querySelector("[data-editor-ai]");
 const accessKeyDialog = document.querySelector("[data-access-key-dialog]");
 const kernelTokenDialog = document.querySelector("[data-kernel-token-dialog]");
 const updateDialog = document.querySelector("[data-update-dialog]");
@@ -541,6 +542,21 @@ editorForm.addEventListener("submit", async (event) => {
     const result = await mutation(`/api/admin/articles/${encodeURIComponent(selectedArticleId)}`, { method: "PUT", body: JSON.stringify(payload) });
     await refreshAfterArticleChange(result, "Article revision saved");
   } catch (error) { showToast(error.message); }
+});
+
+editorAi.addEventListener("click", async () => {
+  if (!selectedArticleId) return;
+  const label = editorAi.textContent;
+  editorAi.disabled = true;
+  editorAi.textContent = "Applying...";
+  try {
+    await mutation(`/api/admin/articles/${encodeURIComponent(selectedArticleId)}/derivatives/regenerate`, { method: "POST" });
+    showToast("AI pipeline queued. Existing generated data will be replaced.");
+  } catch (error) { showToast(error.message); }
+  finally {
+    editorAi.disabled = false;
+    editorAi.textContent = label;
+  }
 });
 
 document.querySelector("[data-main-file]").addEventListener("change", async (event) => {
