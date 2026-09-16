@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="robots" content="noindex, nofollow, noarchive" />
     <title>Laboratory Admin</title>
+    <link rel="icon" type="image/png" sizes="650x650" href="/favicon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -32,12 +33,11 @@
 
       <div class="admin-protected" data-admin-protected hidden>
         <div class="admin-session-row">
-          <span data-session-label></span>
           <button class="button-quiet" type="button" data-logout>Sign out</button>
         </div>
 
-        <form class="admin-sections" data-content-form>
-          <section class="admin-card section-card">
+        <div class="admin-sections">
+          <form class="admin-card section-card admin-section-form" data-identity-form>
             <div class="section-heading"><h2>Identity</h2><p>English-only public labels.</p></div>
             <div class="section-grid">
               <label>Site title <input name="siteTitle" maxlength="60" required /></label>
@@ -45,7 +45,17 @@
               <label class="wide-field">Hero subtitle <input name="heroSubtitle" maxlength="120" required /></label>
               <label>About Me title <input name="aboutTitle" maxlength="60" required /></label>
               <label>Journal title <input name="journalTitle" maxlength="60" required /></label>
-              <label>Time zone <input name="timeZone" maxlength="80" required /></label>
+              <label>Time zone <select name="timeZone" data-time-zone required></select></label>
+            </div>
+            <div class="admin-save-wrap"><button type="submit">Save changes</button></div>
+          </form>
+
+          <form class="admin-card section-card admin-section-form" data-atmosphere-form>
+            <div class="section-heading"><h2>Atmosphere</h2><p>Original grain treatment and page imagery.</p></div>
+            <div class="section-grid compact-grid">
+              <label class="check-field"><input name="noiseEnabled" type="checkbox" /> Film grain</label>
+              <label>Intensity <input name="noiseIntensity" type="range" min="0" max="100" /></label>
+              <label>Grain <input name="noiseGrain" type="range" min="0" max="100" /></label>
               <label>Default theme
                 <select name="themeDefault">
                   <option value="system">System</option>
@@ -54,74 +64,33 @@
                 </select>
               </label>
             </div>
-          </section>
-
-          <section class="admin-card section-card">
-            <div class="section-heading"><h2>Atmosphere</h2><p>Original grain treatment and page imagery.</p></div>
-            <div class="section-grid compact-grid">
-              <label class="check-field"><input name="noiseEnabled" type="checkbox" /> Film grain</label>
-              <label>Intensity <input name="noiseIntensity" type="range" min="0" max="100" /></label>
-              <label>Grain <input name="noiseGrain" type="range" min="0" max="100" /></label>
-            </div>
             <div class="upload-grid" data-upload-grid></div>
-          </section>
-
-          <div class="admin-save-wrap"><button type="submit">Save changes</button></div>
-        </form>
+            <div class="admin-save-wrap"><button type="submit">Save changes</button></div>
+          </form>
+        </div>
 
         <section class="admin-card section-card">
-          <div class="section-heading"><h2>Article library</h2><p>ZIP archives, Markdown/PDF revisions and GitHub publication.</p></div>
+          <div class="section-heading"><h2>Import</h2><p>Markdown documents or complete article ZIP archives.</p></div>
           <form class="article-import-form" data-article-import-form>
-            <label class="button-file">Import article ZIP<input name="file" type="file" accept="application/zip,.zip" required /></label>
+            <label class="button-file">Import article<input name="file" type="file" accept="application/zip,text/markdown,.zip,.md" required /></label>
             <label>Initial state
               <select name="status">
                 <option value="published">Published</option>
                 <option value="unpublished">Unpublished</option>
               </select>
             </label>
-            <label>Title override <input name="title" maxlength="160" placeholder="Archive filename by default" /></label>
+            <label>Title override <input name="title" maxlength="160" placeholder="Filename by default" /></label>
             <button type="submit">Import</button>
           </form>
+        </section>
+
+        <section class="admin-card section-card">
+          <div class="section-heading"><h2>Library</h2><p>Published and unpublished articles, revisions and GitHub synchronization.</p></div>
           <div class="library-toolbar">
             <button type="button" class="button-quiet" data-library-sync>Sync from GitHub</button>
             <span data-library-status></span>
           </div>
           <div class="admin-articles" data-admin-articles></div>
-          <section class="article-editor" data-article-editor hidden>
-            <div class="article-editor-heading">
-              <div><p data-editor-id></p><h3 data-editor-heading></h3></div>
-              <div class="article-editor-actions">
-                <a class="button-link" data-editor-download href="#">Download ZIP</a>
-                <button class="button-quiet" type="button" data-editor-collapse>Collapse</button>
-              </div>
-            </div>
-            <form class="article-editor-form" data-article-editor-form>
-              <div class="section-grid">
-                <label>Title <input name="title" maxlength="160" required /></label>
-                <label>URL slug <input name="slug" maxlength="100" required /></label>
-                <label>State
-                  <select name="status">
-                    <option value="published">Published</option>
-                    <option value="unpublished">Unpublished</option>
-                  </select>
-                </label>
-                <label class="wide-field markdown-source-field" data-markdown-field>Markdown source
-                  <textarea name="markdownSource" rows="22" spellcheck="true"></textarea>
-                </label>
-              </div>
-              <button type="submit">Save revision</button>
-            </form>
-            <div class="article-file-actions">
-              <label class="button-file">Replace article.md / article.pdf<input type="file" accept="application/pdf,text/markdown,.pdf,.md" data-main-file /></label>
-              <label class="button-file">Add media<input type="file" data-article-media /></label>
-              <label class="button-file">Add attachment<input type="file" data-article-attachment /></label>
-            </div>
-            <div class="article-files" data-article-files></div>
-            <div class="article-revisions" data-article-revisions></div>
-            <div class="article-delete-wrap">
-              <button class="button-danger" type="button" data-editor-delete>Delete article</button>
-            </div>
-          </section>
         </section>
 
         <section class="admin-card section-card">
@@ -131,9 +100,11 @@
             <label class="button-file">Restore backup<input type="file" accept="application/zip,.zip" data-restore-input /></label>
           </div>
           <dl class="runtime-grid" data-neptune-runtime></dl>
-          <div class="system-actions">
+          <div class="neptune-controls">
             <p>Schedules and remote backup runs are managed in Saturn → Synchronization.</p>
-            <form data-neptune-initialize><label>Saturn setup code<input name="enrollment_code" required minlength="32" maxlength="32" autocomplete="off" /></label><button type="submit">Initialize Neptune</button></form>
+            <form class="neptune-initialize-form" data-neptune-initialize><label>Saturn setup code<input name="enrollment_code" required minlength="32" maxlength="32" autocomplete="off" /></label><button type="submit">Initialize Neptune</button></form>
+          </div>
+          <div class="system-actions">
             <button type="button" class="button-quiet" data-neptune-check>Check Neptune update</button>
             <button type="button" data-neptune-install hidden>Install Neptune</button>
           </div>
@@ -141,19 +112,115 @@
         </section>
 
         <section class="admin-card section-card">
-          <div class="section-heading"><h2>System</h2><p>Kernel Registry, local Updater and recovery.</p></div>
+          <div class="section-heading"><h2>System</h2><p>Runtime and publication connections.</p></div>
           <dl class="runtime-grid" data-runtime></dl>
-          <form data-access-key-form><h3>Access Key</h3><label>Current Access Key<input name="current_access_key" type="password" required autocomplete="current-password" /></label><label>New Access Key<input name="new_access_key" type="password" minlength="12" required autocomplete="new-password" /></label><label>Repeat Access Key<input name="confirm_access_key" type="password" minlength="12" required autocomplete="new-password" /></label><button type="submit">Change Access Key</button></form>
-          <form data-kernel-form><h3>Connection with Kernel</h3><label>Kernel URL<input name="url" type="url" required /></label><label>New token (leave empty to retain)<input name="token" type="password" autocomplete="new-password" /></label><label>Repeat token<input name="confirm_token" type="password" autocomplete="new-password" /></label><button type="submit">Validate and save connection</button></form>
-          <div class="system-actions"><button type="button" data-telemetry>Refresh telemetry</button><button type="button" data-documentation>Documentation</button><button type="button" data-updater-self>Update Updater</button></div><div data-system-detail></div>
           <div class="system-actions">
             <a class="button-link" href="/api/admin/audit/export">Download audit log</a>
-            <button type="button" class="button-quiet" data-update-check>Check for update</button>
+            <button type="button" data-access-key-open>Change Access Key</button>
           </div>
-          <p class="admin-note" data-update-result></p>
+        </section>
+
+        <section class="admin-card section-card">
+          <div class="section-heading"><h2>Connection with Kernel</h2><p>Validate the registry origin and service credential before saving.</p></div>
+          <form class="connection-form" data-kernel-form>
+            <label>Kernel URL<input name="url" type="url" required placeholder="https://kernel.example.com" /></label>
+            <div class="kernel-form-actions"><button type="button" class="button-quiet" data-kernel-token-open>Change Kernel token</button><button type="submit">Validate and save connection</button></div>
+          </form>
+        </section>
+
+        <section class="admin-card section-card">
+          <div class="section-heading"><h2>AI pipeline</h2><p>Generated summaries, transcripts and evidence for published articles.</p></div>
+          <form class="ai-settings-form" data-ai-settings-form>
+            <div class="ai-settings-status">
+              <label class="check-field"><input name="enabled" type="checkbox" /> Enable AI pipeline</label>
+              <span data-ai-credential></span>
+              <span data-ai-model></span>
+            </div>
+            <details class="prompt-editor">
+              <summary>View and edit system prompt</summary>
+              <label>System prompt<textarea name="prompt" rows="18" required spellcheck="true"></textarea></label>
+            </details>
+            <div class="admin-save-wrap"><button type="submit">Save changes</button></div>
+          </form>
+        </section>
+
+        <section class="admin-card section-card">
+          <div class="section-heading"><h2>Update</h2><p>Laboratory release and local Updater binding.</p></div>
+          <dl class="runtime-grid update-runtime">
+            <dt>Current version</dt><dd data-update-version></dd>
+            <dt>Updater</dt><dd data-updater-status></dd>
+          </dl>
+          <div class="system-actions">
+            <button type="button" data-update-check>Check for update</button>
+            <button type="button" data-updater-self>Update Updater</button>
+          </div>
+          <p class="admin-note" data-updater-result></p>
         </section>
       </div>
     </main>
+
+    <dialog class="site-dialog article-editor article-editor-dialog" data-article-editor aria-labelledby="article-editor-title">
+      <button class="dialog-icon-close" type="button" data-editor-collapse aria-label="Close article editor">×</button>
+      <div class="article-editor-heading">
+        <div><p data-editor-id></p><h3 id="article-editor-title" data-editor-heading></h3></div>
+      </div>
+      <form class="article-editor-form" data-article-editor-form>
+        <div class="section-grid">
+          <label>Title <input name="title" maxlength="160" required /></label>
+          <label>URL slug <input name="slug" maxlength="100" required /></label>
+          <label>State
+            <select name="status">
+              <option value="published">Published</option>
+              <option value="unpublished">Unpublished</option>
+            </select>
+          </label>
+          <label class="wide-field markdown-source-field" data-markdown-field>Markdown source
+            <textarea name="markdownSource" rows="18" spellcheck="true"></textarea>
+          </label>
+        </div>
+        <div class="article-file-actions">
+          <label class="button-file">Replace article.md / article.pdf<input type="file" accept="application/pdf,text/markdown,.pdf,.md" data-main-file /></label>
+        </div>
+        <div class="article-files" data-article-files></div>
+        <div class="article-revisions" data-article-revisions></div>
+        <div class="article-editor-footer">
+          <div class="article-editor-footer-left">
+            <a class="button-link" data-editor-download href="#">Download ZIP</a>
+            <button class="button-danger" type="button" data-editor-delete>Delete article</button>
+          </div>
+          <button type="submit">Save revision</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="site-dialog form-dialog" data-access-key-dialog aria-labelledby="access-key-dialog-title">
+      <div class="site-dialog-kicker">Laboratory / security</div>
+      <h2 id="access-key-dialog-title">Change Access Key</h2>
+      <form class="dialog-form" data-access-key-form>
+        <label>Current Access Key<input name="current_access_key" type="password" required autocomplete="current-password" /></label>
+        <label>New Access Key<input name="new_access_key" type="password" minlength="12" required autocomplete="new-password" /></label>
+        <label>Repeat Access Key<input name="confirm_access_key" type="password" minlength="12" required autocomplete="new-password" /></label>
+        <div class="site-dialog-actions"><button class="button-quiet" type="button" data-access-key-close>Cancel</button><button type="submit">Save changes</button></div>
+      </form>
+    </dialog>
+
+    <dialog class="site-dialog form-dialog" data-kernel-token-dialog aria-labelledby="kernel-token-dialog-title">
+      <div class="site-dialog-kicker">Laboratory / Kernel</div>
+      <h2 id="kernel-token-dialog-title">Change Kernel token</h2>
+      <form class="dialog-form" data-kernel-token-form>
+        <label>New token<input name="token" type="password" required autocomplete="new-password" /></label>
+        <label>Repeat token<input name="confirm_token" type="password" required autocomplete="new-password" /></label>
+        <div class="site-dialog-actions"><button class="button-quiet" type="button" data-kernel-token-close>Cancel</button><button type="submit">Save changes</button></div>
+      </form>
+    </dialog>
+
+    <dialog class="site-dialog update-dialog" data-update-dialog aria-labelledby="update-dialog-title">
+      <div class="site-dialog-kicker">Laboratory / update</div>
+      <h2 id="update-dialog-title">Laboratory update</h2>
+      <p>Installed version: <strong data-update-dialog-version></strong></p>
+      <div class="update-dialog-result" data-update-result></div>
+      <div class="site-dialog-actions"><button class="button-quiet" type="button" data-update-close>Close</button></div>
+    </dialog>
     <dialog class="site-dialog" data-confirm-dialog aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message">
       <div class="site-dialog-kicker">Laboratory / private</div>
       <h2 id="confirm-dialog-title" data-confirm-title>Confirm action</h2>

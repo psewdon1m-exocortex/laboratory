@@ -24,6 +24,8 @@ export const UPLOAD_SLOTS = {
   heroImage: { kind: "image", maxBytes: 25 * 1024 * 1024 },
   aboutImage: { kind: "image", maxBytes: 25 * 1024 * 1024 },
   journalImage: { kind: "image", maxBytes: 25 * 1024 * 1024 },
+  webIcon: { kind: "image", maxBytes: 5 * 1024 * 1024 },
+  socialImage: { kind: "image", maxBytes: 25 * 1024 * 1024, extensions: [".png"] },
   aboutMarkdown: { kind: "markdown", maxBytes: 2 * 1024 * 1024 },
   // Kept for restoring older backups. The public About page no longer renders this slot.
   aboutPdf: { kind: "pdf", maxBytes: 120 * 1024 * 1024 },
@@ -128,6 +130,7 @@ export function validateUpload(slot, file) {
   }
   const extension = imageExtension(file.buffer);
   if (!extension) throw new Error("Unsupported image format");
+  if (definition.extensions && !definition.extensions.includes(extension)) throw new Error("This image must be a PNG");
   const mime = extension === ".jpg" ? "image/jpeg" : `image/${extension.slice(1)}`;
   return { extension, mime };
 }
@@ -356,7 +359,7 @@ export class LaboratoryStore {
         ON CONFLICT(slot) DO UPDATE SET filename = excluded.filename, original_name = excluded.original_name,
           mime = excluded.mime, size = excluded.size, sha256 = excluded.sha256, updated_at = excluded.updated_at
       `).run(slot, filename, path.basename(file.originalname || filename), mime, file.buffer.length, sha256(file.buffer), new Date().toISOString());
-      const scope = slot === "heroImage" ? "home" : slot.startsWith("about") ? "about" : "journal";
+      const scope = ["webIcon", "socialImage"].includes(slot) ? "site" : slot === "heroImage" ? "home" : slot.startsWith("about") ? "about" : "journal";
       this.recordContentEvent({ eventType: "PageAssetUpdated", scope });
       this.db.exec("COMMIT");
     } catch (error) {
@@ -383,7 +386,7 @@ export class LaboratoryStore {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.db.prepare("DELETE FROM assets WHERE slot = ?").run(slot);
-      const scope = slot === "heroImage" ? "home" : slot.startsWith("about") ? "about" : "journal";
+      const scope = ["webIcon", "socialImage"].includes(slot) ? "site" : slot === "heroImage" ? "home" : slot.startsWith("about") ? "about" : "journal";
       this.recordContentEvent({ eventType: "PageAssetRemoved", scope });
       this.db.exec("COMMIT");
     } catch (error) {

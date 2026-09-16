@@ -6,7 +6,7 @@ Laboratory is deployed as one non-root container behind the single server-manage
 
 ## First installation
 
-> The next release contains this standalone pipeline. Publish the tested Updater 0.4.6 first, then the qualified Laboratory 0.1.2 assets. Earlier published bootstraps do not contain these changes. See [DEPLOYMENT.md](../DEPLOYMENT.md) for the complete scoped Register checklist and activation evidence.
+> The next release contains this standalone pipeline. Publish the tested Updater 0.4.6 first, then the qualified Laboratory 0.1.3 assets. Earlier published bootstraps do not contain these changes. See [DEPLOYMENT.md](../DEPLOYMENT.md) for the complete scoped Register checklist and activation evidence.
 
 Use a tagged release, never `main`:
 

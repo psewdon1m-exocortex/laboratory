@@ -1,6 +1,6 @@
 # Deploying laboratory
 
-This runbook applies to the next signed laboratory-v0.1.2 release. Source changes are not a published release. Start only after the exact immutable tag, anonymous assets, signature and Part 12 report pass CI.
+This runbook applies to the next signed laboratory-v0.1.3 release. Source changes are not a published release. Start only after the exact immutable tag, anonymous assets, signature and Part 12 report pass CI.
 
 ## Ownership and release order
 
@@ -13,7 +13,7 @@ The operator explicitly authorized this head profile on 2026-09-14. Its additive
 Record hostname, working directory and installed agent versions before changes. Prepare Docker Compose v2, curl, OpenSSL, Python 3 and server nginx yourself. DNS egress, github.com/release-assets.githubusercontent.com, ghcr.io and the Kernel/Saturn HTTPS origins must be reachable. No incoming application port is public.
 
 ```bash
-curl -fsSL https://github.com/psewdon1m-exocortex/laboratory/releases/download/laboratory-v0.1.2/bootstrap.sh | sudo sh
+curl -fsSL https://github.com/psewdon1m-exocortex/laboratory/releases/download/laboratory-v0.1.3/bootstrap.sh | sudo sh
 sudoedit /opt/exocortex/laboratory/.env
 sudo chmod 600 /opt/exocortex/laboratory/.env
 sudo laboratory-install
@@ -22,6 +22,12 @@ curl -fsS http://127.0.0.1:18380/api/health
 ```
 
 Fill only LABORATORY_ACCESS_KEY, KERNEL_URL (canonical HTTPS origin), and KERNEL_SERVICE_TOKEN (the scoped machine credential issued for this head). Bootstrap supplies the immutable image digest, local session secret and helper control/export credentials. Do not copy another service's .env or release private key. The installer generates the actual Docker gateway proxy addresses; there is no operator IP allowlist or wildcard proxy trust.
+
+LABORATORY_ACCESS_KEY must be explicitly present but has no length,
+composition, character-set, URL-safe/ASCII, strength/entropy or value-denylist
+policy. Every supported path must preserve the exact operator-supplied value.
+The current 12–1024-character validation is a documented `BST-13`
+implementation gap, not a deployment requirement.
 
 Bootstrap has no arguments. It rejects a mismatched signature, version, digest, unsafe tar member, foreign existing trust key or existing installation. After an interrupted staging, inspect the fixed target before removing only a newly created incomplete directory; an established deployment must be updated through its authenticated Updater. Re-running prepare/install preserves operator values. An update merges missing safe defaults; rollback restores the exact previous .env and deployment plus the supplied data backup.
 

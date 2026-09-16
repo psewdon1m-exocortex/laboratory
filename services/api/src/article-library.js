@@ -652,8 +652,15 @@ export class ArticleLibrary {
     if (!allowRemoteOmission && revisionFiles.some((file) => file.storageBackend === "saturn")) {
       throw new Error("Saturn-backed articles are exported through the Laboratory backup; a standalone ZIP cannot preserve immutable remote references");
     }
-    const files = revisionFiles.filter((file) => file.storageBackend !== "saturn");
     const revision = this.revisionRow(article.current_revision_id);
+    const files = revisionFiles.filter((file) => file.storageBackend !== "saturn");
+    const derivative = this.db.prepare(`
+      SELECT abstract_markdown FROM article_derivatives
+      WHERE revision_id = ? AND source_sha256 = ?
+    `).get(revision.id, revision.source_sha256);
+    if (derivative?.abstract_markdown && !files.some((file) => file.path === "attachments/summary.md")) {
+      files.push({ path: "attachments/summary.md", bytes: Buffer.from(derivative.abstract_markdown, "utf8") });
+    }
     return buildArticleArchive({ internalId: article.internal_id, files, metadata: JSON.parse(revision.metadata_json || "{}") });
   }
 

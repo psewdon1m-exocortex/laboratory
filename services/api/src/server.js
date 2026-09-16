@@ -17,7 +17,7 @@ import {
 import { createBackup, MAX_ARCHIVE_BYTES, parseBackupAsync } from "./backup.js";
 import { AgentCatalog } from "./agent-catalog.js";
 import { AuditLog } from "./audit-log.js";
-import { MAX_ARTICLE_ARCHIVE_BYTES } from "./article-archive.js";
+import { buildArticleArchive, MAX_ARTICLE_ARCHIVE_BYTES } from "./article-archive.js";
 import { renderMarkdownDocument } from "./article-markdown.js";
 import { loadConfig } from "./config.js";
 import { DerivedContentRuntime } from "./derived-content.js";
@@ -66,6 +66,8 @@ export async function createLaboratoryApp(overrides = {}) {
   const config = loadConfig(overrides);
   await loadKernelConnection(config);
   const store = await LaboratoryStore.open(config);
+  const storedAiPipeline = store.db.prepare("SELECT value FROM settings WHERE key = 'aiPipelineEnabled'").get();
+  if (storedAiPipeline) config.derivedContentEnabled = storedAiPipeline.value === "true";
   const register = new KernelRegisterRuntime(config);
   await register.start();
   store.library.resolveSaturnOrigin = () => register.state.saturnUrl;
@@ -505,6 +507,26 @@ export async function createLaboratoryApp(overrides = {}) {
     catch (error) { next(error); }
   });
 
+  app.get("/api/admin/ai", auth.requireAdmin, (_req, res) => {
+    res.json(derivedContent.settings());
+  });
+
+  app.put("/api/admin/ai", auth.requireMutation, async (req, res, next) => {
+    const previous = config.derivedContentEnabled;
+    try {
+      const enabled = req.body?.enabled;
+      if (enabled === true && !previous) {
+        config.derivedContentEnabled = true;
+        await register.refresh();
+        if (register.error || !register.state.geminiApiKey) throw new Error(register.error || "Gemini API key is unavailable in Kernel Register");
+      }
+      res.json(derivedContent.configure({ enabled, prompt: req.body?.prompt }));
+    } catch (error) {
+      config.derivedContentEnabled = previous;
+      next(error);
+    }
+  });
+
   app.post("/api/admin/upload/:slot", auth.requireMutation, archiveOperation(async (req, res, next) => {
     const slot = req.params.slot;
     if (!UPLOAD_SLOTS[slot]) return res.status(400).json({ error: "Unknown upload slot" });
@@ -536,9 +558,15 @@ export async function createLaboratoryApp(overrides = {}) {
 
   app.post("/api/admin/articles/import", auth.requireMutation, archiveOperation(async (req, res, next) => {
       try {
-        const result = await store.library.importArchive(req.file?.buffer, {
-          archiveName: req.file?.originalname,
-          title: req.body?.title || undefined,
+        if (!req.file?.buffer?.length) throw new Error("Article file is required");
+        const originalName = String(req.file.originalname || "article.zip");
+        const markdown = /\.md$/i.test(originalName);
+        const archive = markdown
+          ? buildArticleArchive({ files: [{ path: "article.md", bytes: req.file.buffer }] })
+          : req.file.buffer;
+        const result = await store.library.importArchive(archive, {
+          archiveName: markdown ? `${path.basename(originalName, path.extname(originalName))}.zip` : originalName,
+          title: req.body?.title || (markdown ? path.basename(originalName, path.extname(originalName)) : undefined),
           status: req.body?.status || "published",
           sourceKind: "admin",
         });
@@ -724,6 +752,24 @@ export async function createLaboratoryApp(overrides = {}) {
         res.json({ restored: await restoreFromBuffer(req.file?.buffer) });
       } catch (restoreError) { next(restoreError); }
     }, backupUpload.single("file"))(req, res, next);
+  });
+
+  app.get("/favicon.png", async (_req, res, next) => {
+    try {
+      const icon = await store.readAsset("webIcon");
+      res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
+      if (!icon) return res.sendFile("favicon.png", { root: config.publicDir });
+      res.type(icon.mime).send(icon.data);
+    } catch (error) { next(error); }
+  });
+
+  app.get("/og.png", async (_req, res, next) => {
+    try {
+      const image = await store.readAsset("socialImage");
+      res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
+      if (!image) return res.sendFile("og.png", { root: config.publicDir });
+      res.type(image.mime).send(image.data);
+    } catch (error) { next(error); }
   });
 
   app.use("/api/media", (req, res, next) => {

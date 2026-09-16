@@ -414,6 +414,16 @@ do not add `OPERATOR_CIDR`, a VPN prerequisite or a source-IP allow-list.
 Laboratory's Access Key and bounded application session protect private content
 and administration routes.
 
+`LABORATORY_ACCESS_KEY` is a required, explicitly supplied opaque exact value.
+It has no minimum/maximum length, required or forbidden character class,
+URL-safe/ASCII restriction, strength/entropy check or known/example/placeholder
+denylist, and no supported path may trim, normalize, fold case or truncate it.
+
+> Implementation gap (2026-09-14): runtime authentication still uses the legacy
+> username/password path and its staged Access Key configuration enforces a
+> 12–1024-character range. Both the authentication migration and removal of that
+> `BST-13` policy remain release blockers; this change updates documentation only.
+
 > The next source release implements signed exact-version bootstrap, Access Key
 > sessions and typed head profiles. Previously published assets remain unchanged;
 > use this flow only after the new qualified release passes CI.

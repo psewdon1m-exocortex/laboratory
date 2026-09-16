@@ -213,7 +213,13 @@ export class DerivedContentRuntime {
   }
 
   async start() {
-    this.systemInstruction = await fs.readFile(SYSTEM_INSTRUCTION_PATH, "utf8");
+    const defaultInstruction = await fs.readFile(SYSTEM_INSTRUCTION_PATH, "utf8");
+    const setting = this.db.prepare("SELECT value FROM settings WHERE key = ?");
+    const insert = this.db.prepare("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)");
+    insert.run("aiPipelineEnabled", this.config.derivedContentEnabled ? "true" : "false");
+    insert.run("aiSystemPrompt", defaultInstruction);
+    this.config.derivedContentEnabled = setting.get("aiPipelineEnabled")?.value === "true";
+    this.systemInstruction = setting.get("aiSystemPrompt")?.value || defaultInstruction;
     this.enqueueMissing();
     setImmediate(() => this.tick());
     this.timer = setInterval(() => this.tick(), this.config.derivedContentIntervalSeconds * 1000);
@@ -234,20 +240,54 @@ export class DerivedContentRuntime {
       credentialError: credential.error,
       provider: "google",
       model: this.config.geminiModel,
-      promptVersion: PROMPT_VERSION,
+      promptVersion: this.promptVersion(),
       jobs: counts,
     };
   }
 
+  promptVersion() {
+    return `${PROMPT_VERSION}+${sha256(this.systemInstruction).slice(0, 12)}`;
+  }
+
+  settings() {
+    return { ...this.status(), prompt: this.systemInstruction };
+  }
+
+  configure({ enabled, prompt }) {
+    if (typeof enabled !== "boolean") throw new Error("AI pipeline enabled must be a boolean");
+    const instruction = String(prompt ?? "").replace(/^\uFEFF/, "").trim();
+    if (instruction.length < 40 || instruction.length > 40_000 || instruction.includes("\0")) {
+      throw new Error("AI system prompt must contain 40-40000 valid characters");
+    }
+    const upsert = this.db.prepare("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      upsert.run("aiPipelineEnabled", enabled ? "true" : "false");
+      upsert.run("aiSystemPrompt", instruction);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    this.config.derivedContentEnabled = enabled;
+    this.systemInstruction = instruction;
+    if (enabled) {
+      this.enqueueMissing();
+      setImmediate(() => this.tick());
+    }
+    return this.settings();
+  }
+
   enqueueMissing() {
     const now = new Date().toISOString();
+    const promptVersion = this.promptVersion();
     this.db.prepare(`
       INSERT OR IGNORE INTO article_generation_jobs(revision_id, status, attempts, next_attempt_at, created_at, updated_at)
       SELECT a.published_revision_id, 'pending', 0, ?, ?, ?
       FROM library_articles a
       LEFT JOIN article_derivatives d ON d.revision_id = a.published_revision_id AND d.prompt_version = ?
       WHERE a.source_status = 'published' AND a.published_revision_id IS NOT NULL AND d.revision_id IS NULL
-    `).run(now, now, now, PROMPT_VERSION);
+    `).run(now, now, now, promptVersion);
     this.db.prepare(`
       UPDATE article_generation_jobs
       SET status = 'pending', attempts = 0, last_error = NULL, next_attempt_at = ?, updated_at = ?
@@ -258,7 +298,7 @@ export class DerivedContentRuntime {
           ON d.revision_id = a.published_revision_id AND d.prompt_version = ?
         WHERE a.source_status = 'published' AND a.published_revision_id IS NOT NULL AND d.revision_id IS NULL
       )
-    `).run(now, now, PROMPT_VERSION);
+    `).run(now, now, promptVersion);
   }
 
   regenerate(reference) {
@@ -381,7 +421,8 @@ export class DerivedContentRuntime {
 
   async persist(job, result) {
     const generatedAt = new Date().toISOString();
-    const generationKey = `g-${sha256(`${job.source_sha256}:${PROMPT_VERSION}:${this.config.geminiModel}:${generatedAt}:${crypto.randomBytes(8).toString("hex")}`).slice(0, 16)}`;
+    const promptVersion = this.promptVersion();
+    const generationKey = `g-${sha256(`${job.source_sha256}:${promptVersion}:${this.config.geminiModel}:${generatedAt}:${crypto.randomBytes(8).toString("hex")}`).slice(0, 16)}`;
     const relativeRoot = path.posix.join(job.internal_id, revisionLabel(job.revision_number), "derived", generationKey);
     const abstractPath = path.posix.join(relativeRoot, "abstract.md");
     const transcriptPath = result.transcriptMarkdown ? path.posix.join(relativeRoot, "transcript.md") : null;
@@ -394,7 +435,7 @@ export class DerivedContentRuntime {
       provider: "google",
       model: this.config.geminiModel,
       thinkingBudget: this.config.geminiThinkingBudget,
-      promptVersion: PROMPT_VERSION,
+      promptVersion,
       generatedAt,
       status: "validated",
       validation: result.validation,
@@ -420,14 +461,14 @@ export class DerivedContentRuntime {
           abstract_path = excluded.abstract_path, transcript_path = excluded.transcript_path,
           evidence_path = excluded.evidence_path, manifest_path = excluded.manifest_path,
           generated_at = excluded.generated_at, updated_at = excluded.updated_at
-      `).run(job.revision_id, generationKey, job.source_sha256, this.config.geminiModel, PROMPT_VERSION, result.description,
+      `).run(job.revision_id, generationKey, job.source_sha256, this.config.geminiModel, promptVersion, result.description,
         result.abstractMarkdown, result.transcriptMarkdown, JSON.stringify(result.evidence), JSON.stringify(result.warnings), JSON.stringify(manifest),
         abstractPath, transcriptPath, evidencePath, manifestPath, generatedAt, generatedAt);
       this.db.prepare(`
         INSERT INTO article_derivative_generations(revision_id, generation_key, source_sha256, provider, model,
           prompt_version, manifest_json, artifact_root, generated_at)
         VALUES (?, ?, ?, 'google', ?, ?, ?, ?, ?)
-      `).run(job.revision_id, generationKey, job.source_sha256, this.config.geminiModel, PROMPT_VERSION,
+      `).run(job.revision_id, generationKey, job.source_sha256, this.config.geminiModel, promptVersion,
         JSON.stringify(manifest), relativeRoot, generatedAt);
       this.db.prepare("UPDATE article_generation_jobs SET status = 'complete', last_error = NULL, updated_at = ? WHERE revision_id = ?").run(generatedAt, job.revision_id);
       this.library.recordContentEvent({

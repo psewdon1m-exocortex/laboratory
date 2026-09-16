@@ -12,7 +12,7 @@ required target contract.
 | Backup and recovery | Applicable | v3 complete logical backup, manifest hashes/counts, resource preflight, checkpoint, staged/transactional restore and negative tests. |
 | Bootstrap and deployment | Blocked | The target is an exact-version bootstrap with embedded derived public key, manifest verification before download and a separate mode-0600 environment. Current release CI does not yet sign/build that trust path; see [RELEASING](../RELEASING.md). |
 | CI, releases and updates | Partial | PR/main CI, build-once digest promotion, SBOM/provenance and rollback exist. Plain `v*` verification and the private-key-signed qualified release path remain release blockers. |
-| Security and exposure | Blocked | Loopback/server-Nginx and private-route controls apply, but runtime login still uses username/password and must migrate to Access Key-only authentication. |
+| Security and exposure | Blocked | Loopback/server-Nginx and private-route controls apply, but runtime login still uses username/password and must migrate to Access Key-only authentication. Staged Access Key validation also imposes a non-conforming 12–1024-character policy instead of accepting the required opaque exact value. |
 | Shared agents | Not currently applicable | Parts 09–11 define no Laboratory Neptune profile. Existing Laboratory Neptune hooks are non-normative until the central profile is explicitly extended. |
 | SEO and GEO | Applicable | SSR metadata/schema, registries, sitemaps, crawler policy, feeds, Evidence API, Markdown and MCP retained for About and Journal. |
 

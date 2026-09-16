@@ -3,7 +3,8 @@ import { api, bindThemeControls, formatPublicationDate } from "./shared.js";
 const loginCard = document.querySelector("[data-login-card]");
 const loginForm = document.querySelector("[data-login-form]");
 const protectedRoot = document.querySelector("[data-admin-protected]");
-const contentForm = document.querySelector("[data-content-form]");
+const identityForm = document.querySelector("[data-identity-form]");
+const atmosphereForm = document.querySelector("[data-atmosphere-form]");
 const uploadGrid = document.querySelector("[data-upload-grid]");
 const articlesRoot = document.querySelector("[data-admin-articles]");
 const runtimeRoot = document.querySelector("[data-runtime]");
@@ -20,6 +21,10 @@ const articleFiles = document.querySelector("[data-article-files]");
 const articleRevisions = document.querySelector("[data-article-revisions]");
 const editorCollapse = document.querySelector("[data-editor-collapse]");
 const editorDelete = document.querySelector("[data-editor-delete]");
+const accessKeyDialog = document.querySelector("[data-access-key-dialog]");
+const kernelTokenDialog = document.querySelector("[data-kernel-token-dialog]");
+const updateDialog = document.querySelector("[data-update-dialog]");
+const aiSettingsForm = document.querySelector("[data-ai-settings-form]");
 const confirmDialog = document.querySelector("[data-confirm-dialog]");
 const confirmTitle = document.querySelector("[data-confirm-title]");
 const confirmMessage = document.querySelector("[data-confirm-message]");
@@ -31,11 +36,89 @@ let selectedArticleId = "";
 let confirmResolver = null;
 let neptuneStatus = null;
 let neptuneRelease = null;
+const customSelectSync = new WeakMap();
+
+function prepareTimeZoneSelect() {
+  const select = document.querySelector("[data-time-zone]");
+  const zones = typeof Intl.supportedValuesOf === "function"
+    ? Intl.supportedValuesOf("timeZone")
+    : ["UTC", "Europe/Istanbul", "Europe/London", "Europe/Berlin", "America/New_York", "America/Los_Angeles", "Asia/Dubai", "Asia/Tokyo"];
+  select.replaceChildren();
+  for (const zone of [...new Set(["UTC", ...zones])]) {
+    const option = document.createElement("option");
+    option.value = zone;
+    option.textContent = zone.replaceAll("_", " ");
+    select.appendChild(option);
+  }
+}
+
+function closeCustomSelects(except = null) {
+  document.querySelectorAll(".custom-select.is-open").forEach((root) => {
+    if (root === except) return;
+    root.classList.remove("is-open");
+    root.querySelector(".custom-select-menu").hidden = true;
+    root.querySelector(".custom-select-trigger").setAttribute("aria-expanded", "false");
+  });
+}
+
+function enhanceSelect(select) {
+  const root = document.createElement("div");
+  root.className = "custom-select";
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "custom-select-trigger";
+  trigger.setAttribute("aria-haspopup", "listbox");
+  trigger.setAttribute("aria-expanded", "false");
+  const menu = document.createElement("div");
+  menu.className = "custom-select-menu";
+  menu.role = "listbox";
+  menu.hidden = true;
+  select.before(root);
+  root.append(select, trigger, menu);
+  select.classList.add("native-select-hidden");
+  const sync = () => {
+    trigger.textContent = select.selectedOptions[0]?.textContent || "Select";
+    menu.querySelectorAll("button").forEach((button) => button.classList.toggle("is-selected", button.dataset.value === select.value));
+  };
+  for (const option of select.options) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.role = "option";
+    item.dataset.value = option.value;
+    item.textContent = option.textContent;
+    item.addEventListener("click", () => {
+      select.value = option.value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      closeCustomSelects();
+      trigger.focus();
+    });
+    menu.appendChild(item);
+  }
+  trigger.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const opening = !root.classList.contains("is-open");
+    closeCustomSelects(root);
+    root.classList.toggle("is-open", opening);
+    menu.hidden = !opening;
+    trigger.setAttribute("aria-expanded", String(opening));
+  });
+  select.addEventListener("change", sync);
+  customSelectSync.set(select, sync);
+  sync();
+}
+
+function syncCustomSelect(select) {
+  customSelectSync.get(select)?.();
+}
+
+document.addEventListener("click", () => closeCustomSelects());
 
 const uploads = [
-  { slot: "heroImage", label: "Hero image", accept: "image/png,image/jpeg,image/webp,image/avif,image/gif" },
-  { slot: "aboutImage", label: "About Me choice image", accept: "image/png,image/jpeg,image/webp,image/avif,image/gif" },
-  { slot: "journalImage", label: "Journal choice image", accept: "image/png,image/jpeg,image/webp,image/avif,image/gif" },
+  { slot: "heroImage", label: "Hero image", recommendation: "Recommended: 1680 × 720 px", accept: "image/png,image/jpeg,image/webp,image/avif,image/gif" },
+  { slot: "aboutImage", label: "About Me choice image", recommendation: "Recommended: 1680 × 720 px", accept: "image/png,image/jpeg,image/webp,image/avif,image/gif" },
+  { slot: "journalImage", label: "Journal choice image", recommendation: "Recommended: 1680 × 720 px", accept: "image/png,image/jpeg,image/webp,image/avif,image/gif" },
+  { slot: "webIcon", label: "Web Icon", recommendation: "Recommended: 512 × 512 px, PNG", accept: "image/png,image/webp,image/avif" },
+  { slot: "socialImage", label: "Link preview image", recommendation: "Recommended: 1731 × 909 px, PNG", accept: "image/png" },
   { slot: "aboutMarkdown", label: "About Me Markdown", accept: "text/markdown,.md" },
 ];
 
@@ -86,16 +169,23 @@ function setAuthenticated(authenticated) {
 }
 
 function fillContent(content) {
-  contentForm.siteTitle.value = content.siteTitle || "";
-  contentForm.heroTitle.value = content.heroTitle || "";
-  contentForm.heroSubtitle.value = content.heroSubtitle || "";
-  contentForm.aboutTitle.value = content.pages?.about?.title || "";
-  contentForm.journalTitle.value = content.pages?.journal?.title || "";
-  contentForm.timeZone.value = content.settings?.timeZone || "UTC";
-  contentForm.themeDefault.value = content.settings?.themeDefault || "system";
-  contentForm.noiseEnabled.checked = Boolean(content.settings?.noise?.enabled);
-  contentForm.noiseIntensity.value = String(content.settings?.noise?.intensity ?? 32);
-  contentForm.noiseGrain.value = String(content.settings?.noise?.grain ?? 55);
+  identityForm.siteTitle.value = content.siteTitle || "";
+  identityForm.heroTitle.value = content.heroTitle || "";
+  identityForm.heroSubtitle.value = content.heroSubtitle || "";
+  identityForm.aboutTitle.value = content.pages?.about?.title || "";
+  identityForm.journalTitle.value = content.pages?.journal?.title || "";
+  identityForm.timeZone.value = content.settings?.timeZone || "UTC";
+  atmosphereForm.themeDefault.value = content.settings?.themeDefault || "system";
+  atmosphereForm.noiseEnabled.checked = Boolean(content.settings?.noise?.enabled);
+  atmosphereForm.noiseIntensity.value = String(content.settings?.noise?.intensity ?? 32);
+  atmosphereForm.noiseGrain.value = String(content.settings?.noise?.grain ?? 55);
+  syncCustomSelect(identityForm.timeZone);
+  syncCustomSelect(atmosphereForm.themeDefault);
+}
+
+function refreshFavicon() {
+  const icon = document.querySelector("link[rel='icon']");
+  if (icon) icon.href = `/favicon.png?v=${Date.now()}`;
 }
 
 function renderUploads(content) {
@@ -107,6 +197,7 @@ function renderUploads(content) {
     item.innerHTML = `
       <strong>${definition.label}</strong>
       <span class="upload-status">${current ? "Uploaded" : "Not uploaded"}</span>
+      ${definition.recommendation ? `<span class="upload-recommendation">${definition.recommendation}</span>` : ""}
       <label class="button-file">Choose file<input type="file" accept="${definition.accept}" /></label>
       <button class="button-quiet" type="button" ${current ? "" : "disabled"}>Remove</button>
     `;
@@ -120,6 +211,7 @@ function renderUploads(content) {
         currentState.content = next;
         fillContent(next);
         renderUploads(next);
+        if (definition.slot === "webIcon") refreshFavicon();
         showToast(`${definition.label} uploaded`);
       } catch (error) { showToast(error.message); }
     });
@@ -128,6 +220,7 @@ function renderUploads(content) {
         const next = await mutation(`/api/admin/upload/${definition.slot}`, { method: "DELETE" });
         currentState.content = next;
         renderUploads(next);
+        if (definition.slot === "webIcon") refreshFavicon();
         showToast(`${definition.label} removed`);
       } catch (error) { showToast(error.message); }
     });
@@ -148,9 +241,9 @@ function renderArticles(articles) {
     const status = document.createElement("small");
     status.textContent = `${article.status} · r${article.revision} · ${article.format}`;
     row.append(name, date, status);
-    row.setAttribute("aria-expanded", String(selectedArticleId === article.internalId && !editor.hidden));
+    row.setAttribute("aria-expanded", String(selectedArticleId === article.internalId && editor.open));
     row.addEventListener("click", () => {
-      if (selectedArticleId === article.internalId && !editor.hidden) closeArticleEditor();
+      if (selectedArticleId === article.internalId && editor.open) closeArticleEditor();
       else openArticleEditor(article.internalId);
     });
     articlesRoot.appendChild(row);
@@ -159,7 +252,7 @@ function renderArticles(articles) {
 
 function closeArticleEditor() {
   selectedArticleId = "";
-  editor.hidden = true;
+  if (editor.open) editor.close();
   for (const row of articlesRoot.querySelectorAll("[aria-expanded='true']")) row.setAttribute("aria-expanded", "false");
 }
 
@@ -172,13 +265,14 @@ function fileSize(value) {
 
 function renderArticleEditor(article) {
   selectedArticleId = article.internalId;
-  editor.hidden = false;
+  if (!editor.open) editor.showModal();
   document.querySelector("[data-editor-id]").textContent = `${article.internalId} · revision ${article.revision}`;
   document.querySelector("[data-editor-heading]").textContent = article.title;
   document.querySelector("[data-editor-download]").href = `/api/admin/articles/${encodeURIComponent(article.internalId)}/archive`;
   editorForm.title.value = article.title;
   editorForm.slug.value = article.slug;
   editorForm.status.value = article.status;
+  syncCustomSelect(editorForm.status);
   editorForm.markdownSource.value = article.markdownSource || "";
   document.querySelector("[data-markdown-field]").hidden = article.format !== "markdown";
   articleFiles.replaceChildren();
@@ -214,7 +308,6 @@ function renderArticleEditor(article) {
 async function openArticleEditor(id) {
   try {
     renderArticleEditor(await api(`/api/admin/articles/${encodeURIComponent(id)}`));
-    editor.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
   } catch (error) { showToast(error.message); }
 }
 
@@ -269,14 +362,17 @@ function runtimeItem(name, value) {
 function renderRuntime(runtime) {
   runtimeRoot.replaceChildren();
   document.querySelector("[data-kernel-form] [name=url]").value = runtime.kernelUrl || "";
-  runtimeItem("Version", runtime.version);
   runtimeItem("Kernel revision", runtime.registerRevision || runtime.registerError || "Local mode");
   runtimeItem("Repository", runtime.repositoryUrl);
   runtimeItem("Article repository", runtime.contentLibrary?.repositoryUrl);
   runtimeItem("Article branch", runtime.contentLibrary?.branch);
   runtimeItem("Last article sync", runtime.contentLibrary?.lastSyncAt || runtime.contentLibrary?.lastError);
   runtimeItem("Public URL", runtime.publicUrl);
-  runtimeItem("Updater", runtime.updater?.available ? `${runtime.updater.status} / ${runtime.updater.version}` : "Not installed locally");
+  document.querySelector("[data-update-version]").textContent = runtime.version || "Unknown";
+  document.querySelector("[data-update-dialog-version]").textContent = runtime.version || "Unknown";
+  document.querySelector("[data-updater-status]").textContent = runtime.updater?.available
+    ? `${runtime.updater.status} / ${runtime.updater.version}`
+    : "Not connected";
 }
 
 function renderNeptune(status) {
@@ -321,6 +417,16 @@ async function loadState() {
     : library.lastCommit ? `Synced ${library.lastCommit.slice(0, 12)}` : "Not synced yet";
 }
 
+async function loadAiSettings() {
+  const settings = await api("/api/admin/ai");
+  aiSettingsForm.enabled.checked = Boolean(settings.enabled);
+  aiSettingsForm.prompt.value = settings.prompt || "";
+  document.querySelector("[data-ai-credential]").textContent = settings.configured
+    ? "API key: connected through Kernel Register / Volt"
+    : "API key: unavailable in Kernel Register";
+  document.querySelector("[data-ai-model]").textContent = `Provider: ${settings.provider} · Model: ${settings.model}`;
+}
+
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
@@ -329,39 +435,66 @@ loginForm.addEventListener("submit", async (event) => {
       body: JSON.stringify({ access_key: loginForm.access_key.value }),
     });
     csrfToken = session.csrfToken;
-    document.querySelector("[data-session-label]").textContent = `Signed in as ${session.username}`;
     await loadState();
+    await loadAiSettings();
     setAuthenticated(true);
     loginForm.reset();
   } catch (error) { showToast(error.message); }
 });
 
-contentForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const payload = {
-    siteTitle: contentForm.siteTitle.value.trim(),
-    heroTitle: contentForm.heroTitle.value.trim(),
-    heroSubtitle: contentForm.heroSubtitle.value.trim(),
+function contentPayload() {
+  const content = currentState.content;
+  return {
+    siteTitle: content.siteTitle,
+    heroTitle: content.heroTitle,
+    heroSubtitle: content.heroSubtitle,
     pages: {
-      about: { title: contentForm.aboutTitle.value.trim() },
-      journal: { title: contentForm.journalTitle.value.trim() },
+      about: { title: content.pages?.about?.title },
+      journal: { title: content.pages?.journal?.title },
     },
     settings: {
-      timeZone: contentForm.timeZone.value.trim(),
-      themeDefault: contentForm.themeDefault.value,
+      timeZone: content.settings?.timeZone,
+      themeDefault: content.settings?.themeDefault,
       noise: {
-        enabled: contentForm.noiseEnabled.checked,
-        intensity: Number(contentForm.noiseIntensity.value),
-        grain: Number(contentForm.noiseGrain.value),
+        enabled: Boolean(content.settings?.noise?.enabled),
+        intensity: Number(content.settings?.noise?.intensity ?? 32),
+        grain: Number(content.settings?.noise?.grain ?? 55),
       },
     },
   };
+}
+
+async function saveContent(payload, message) {
   try {
     const content = await mutation("/api/admin/content", { method: "PUT", body: JSON.stringify(payload) });
     currentState.content = content;
     fillContent(content);
-    showToast("Changes saved");
+    showToast(message);
   } catch (error) { showToast(error.message); }
+}
+
+identityForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const payload = contentPayload();
+  payload.siteTitle = identityForm.siteTitle.value.trim();
+  payload.heroTitle = identityForm.heroTitle.value.trim();
+  payload.heroSubtitle = identityForm.heroSubtitle.value.trim();
+  payload.pages.about.title = identityForm.aboutTitle.value.trim();
+  payload.pages.journal.title = identityForm.journalTitle.value.trim();
+  payload.settings.timeZone = identityForm.timeZone.value.trim();
+  await saveContent(payload, "Identity saved");
+});
+
+atmosphereForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const payload = contentPayload();
+  payload.settings.themeDefault = atmosphereForm.themeDefault.value;
+  payload.settings.noise = {
+    enabled: atmosphereForm.noiseEnabled.checked,
+    intensity: Number(atmosphereForm.noiseIntensity.value),
+    grain: Number(atmosphereForm.noiseGrain.value),
+  };
+  await saveContent(payload, "Atmosphere saved");
 });
 
 importForm.addEventListener("submit", async (event) => {
@@ -375,8 +508,24 @@ importForm.addEventListener("submit", async (event) => {
   try {
     const result = await mutation("/api/admin/articles/import", { method: "POST", body });
     importForm.reset();
-    await refreshAfterArticleChange(result, "Article archive imported");
+    await refreshAfterArticleChange(result, "Article imported");
   } catch (error) { showToast(error.message); }
+});
+
+aiSettingsForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = aiSettingsForm.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    const settings = await mutation("/api/admin/ai", {
+      method: "PUT",
+      body: JSON.stringify({ enabled: aiSettingsForm.enabled.checked, prompt: aiSettingsForm.prompt.value }),
+    });
+    aiSettingsForm.prompt.value = settings.prompt;
+    await loadAiSettings();
+    showToast("AI pipeline settings saved");
+  } catch (error) { showToast(error.message); }
+  finally { button.disabled = false; }
 });
 
 editorForm.addEventListener("submit", async (event) => {
@@ -410,10 +559,9 @@ document.querySelector("[data-main-file]").addEventListener("change", async (eve
   input.value = "";
 });
 
-document.querySelector("[data-article-media]").addEventListener("change", (event) => uploadArticleFile(event.currentTarget, "media"));
-document.querySelector("[data-article-attachment]").addEventListener("change", (event) => uploadArticleFile(event.currentTarget, "attachments"));
-
 editorCollapse.addEventListener("click", closeArticleEditor);
+editor.addEventListener("cancel", (event) => { event.preventDefault(); });
+editor.addEventListener("click", (event) => { if (event.target === editor) closeArticleEditor(); });
 
 editorDelete.addEventListener("click", async () => {
   if (!selectedArticleId) return;
@@ -481,6 +629,7 @@ document.querySelector("[data-restore-input]").addEventListener("change", async 
 
 document.querySelector("[data-update-check]").addEventListener("click", async () => {
   const output = document.querySelector("[data-update-result]");
+  if (!updateDialog.open) updateDialog.showModal();
   output.textContent = "Checking releases";
   try {
     const result = await mutation("/api/updates/check", { method: "POST" });
@@ -534,11 +683,16 @@ neptuneInstall.addEventListener("click", async () => {
 
 async function initialize() {
   bindThemeControls();
+  prepareTimeZoneSelect();
+  document.querySelectorAll("select").forEach(enhanceSelect);
+  document.querySelectorAll("form").forEach((form) => form.addEventListener("reset", () => requestAnimationFrame(() => {
+    form.querySelectorAll("select").forEach(syncCustomSelect);
+  })));
   try {
     const session = await api("/api/admin/session");
     csrfToken = session.csrfToken;
-    document.querySelector("[data-session-label]").textContent = `Signed in as ${session.username}`;
     await loadState();
+    await loadAiSettings();
     setAuthenticated(true);
   } catch {
     setAuthenticated(false);
@@ -566,18 +720,37 @@ document.querySelector("[data-neptune-initialize]").addEventListener("submit", a
 for (const [selector, route] of [["[data-access-key-form]", "/api/admin/security/access-key"], ["[data-kernel-form]", "/api/admin/security/kernel"]]) {
   document.querySelector(selector).addEventListener("submit", async (event) => {
     event.preventDefault(); const form = event.currentTarget, button = form.querySelector("button"); button.disabled = true;
-    try { const result = await mutation(route, { method: "PUT", body: JSON.stringify(Object.fromEntries(new FormData(form))) }); if (result.csrfToken) csrfToken = result.csrfToken; form.reset(); await loadState(); showToast("Validated and saved"); }
+    try { const result = await mutation(route, { method: "PUT", body: JSON.stringify(Object.fromEntries(new FormData(form))) }); if (result.csrfToken) csrfToken = result.csrfToken; form.reset(); if (selector === "[data-access-key-form]" && accessKeyDialog.open) accessKeyDialog.close(); await loadState(); showToast("Validated and saved"); }
     catch (error) { showToast(error.message); } finally { button.disabled = false; }
   });
 }
-for (const name of ["telemetry", "documentation"]) document.querySelector("[data-" + name + "]").addEventListener("click", async () => {
-  const detail = document.querySelector("[data-system-detail]");
-  try { const result = await api("/api/admin/" + name); detail.replaceChildren();
-    for (const item of result.sections || [{title:"Storage and runtime", body:JSON.stringify(result, null, 2)}]) { const h = document.createElement("h3"), p = document.createElement("pre"); h.textContent = item.title; p.textContent = item.body; detail.append(h, p); }
-  } catch (error) { detail.textContent = error.message; }
+document.querySelector("[data-access-key-open]").addEventListener("click", () => accessKeyDialog.showModal());
+document.querySelector("[data-access-key-close]").addEventListener("click", () => accessKeyDialog.close());
+accessKeyDialog.addEventListener("click", (event) => { if (event.target === accessKeyDialog) accessKeyDialog.close(); });
+document.querySelector("[data-kernel-token-open]").addEventListener("click", () => kernelTokenDialog.showModal());
+document.querySelector("[data-kernel-token-close]").addEventListener("click", () => kernelTokenDialog.close());
+kernelTokenDialog.addEventListener("click", (event) => { if (event.target === kernelTokenDialog) kernelTokenDialog.close(); });
+document.querySelector("[data-kernel-token-form]").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    const payload = Object.fromEntries(new FormData(form));
+    payload.url = document.querySelector("[data-kernel-form] [name=url]").value;
+    await mutation("/api/admin/security/kernel", { method: "PUT", body: JSON.stringify(payload) });
+    form.reset();
+    kernelTokenDialog.close();
+    await loadState();
+    showToast("Kernel token saved");
+  } catch (error) { showToast(error.message); }
+  finally { button.disabled = false; }
 });
+document.querySelector("[data-update-close]").addEventListener("click", () => updateDialog.close());
+updateDialog.addEventListener("click", (event) => { if (event.target === updateDialog) updateDialog.close(); });
 document.querySelector("[data-updater-self]").addEventListener("click", async (event) => {
   const button = event.currentTarget; button.disabled = true;
-  try { await waitJob(await mutation("/api/updates/agent/install", {method:"POST"}), document.querySelector("[data-system-detail]")); await loadState(); }
+  const output = document.querySelector("[data-updater-result]");
+  try { await waitJob(await mutation("/api/updates/agent/install", {method:"POST"}), output); await loadState(); }
   catch (error) { showToast(error.message); } finally { button.disabled = false; }
 });
