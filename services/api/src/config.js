@@ -99,6 +99,9 @@ export function loadConfig(overrides = {}) {
     searchNotificationTimeoutMs: integer("LABORATORY_SEARCH_NOTIFICATION_TIMEOUT_SEC", 15, 1) * 1000,
     publicApiRateLimit: integer("LABORATORY_PUBLIC_API_RATE_LIMIT", 120, 10),
     mcpRateLimit: integer("LABORATORY_MCP_RATE_LIMIT", 60, 10),
+    publicTelemetryRateLimit: integer("LABORATORY_PUBLIC_TELEMETRY_RATE_LIMIT", 60, 10),
+    publicTelemetryRetentionDays: integer("LABORATORY_PUBLIC_TELEMETRY_RETENTION_DAYS", 30, 1),
+    mcpAllowedOrigins: (process.env.LABORATORY_MCP_ALLOWED_ORIGINS || "").split(",").map((value) => value.trim()).filter(Boolean),
     updaterSocketPath:
       process.env.UPDATER_SOCKET_PATH ?? "/run/exocortex/updater.sock",
     updaterHeadId: process.env.UPDATER_HEAD_ID ?? "laboratory",

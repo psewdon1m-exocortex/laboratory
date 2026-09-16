@@ -1,4 +1,5 @@
 (function initializeTheme() {
+  document.documentElement.classList.add("js");
   let mode = "system";
   try {
     const saved = localStorage.getItem("laboratory_theme");

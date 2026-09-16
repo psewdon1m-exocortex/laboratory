@@ -299,4 +299,13 @@ export class EvidenceIndex {
     `).all(article.internalId, article.revision);
     return rows.map((row) => rowToEvidence(row, baseUrl, this.language));
   }
+
+  get(evidenceId, baseUrl) {
+    this.synchronize();
+    const row = this.db.prepare(`
+      SELECT p.*, NULL AS rank FROM public_evidence_passages p
+      WHERE p.evidence_id = ? LIMIT 1
+    `).get(String(evidenceId || ""));
+    return row ? rowToEvidence(row, baseUrl, this.language) : null;
+  }
 }

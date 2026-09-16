@@ -743,6 +743,9 @@ test("derived generations use immutable versioned URLs and requeue stale prompt 
   });
   assert.match(articlePage, /<details class="article-abstract"><summary>Abstract<\/summary>/);
   assert.match(articlePage, /compact abstract/);
+  assert.match(articlePage, /class="article-end has-derived"/);
+  assert.match(articlePage, /data-article-derived-toggle[^>]+aria-expanded="false"[^>]*>\+<\/button>/);
+  assert.doesNotMatch(articlePage, /aria-label="Show abstract and transcript" hidden/);
   assert.doesNotMatch(articlePage, /<h1[^>]*>Abstract<\/h1>/i);
   const pdfPage = renderArticlePage(articleTemplate, {
     content: store.getContent(),
@@ -837,6 +840,8 @@ test("deleted article URLs are retained as tombstones and queued for IndexNow", 
   assert.equal(store.library.getGoneUrl(imported.article.slug).reason, "deleted");
   notifications.start();
   notifications.enqueueUrlChanges();
+  assert.equal(notifications.preflight().ready, false);
+  assert.ok(notifications.preflight().issues.some((issue) => /key/i.test(issue)));
   const job = notifications.urlJob("indexnow");
   assert.equal(job.slug, imported.article.slug);
   assert.equal(job.status, "pending");
@@ -887,15 +892,25 @@ test("HTTP routes, clean article URLs and protected admin mutations work", async
   assert.match(articleHtml, /application\/ld\+json/);
   assert.match(articleHtml, /property="og:image"/);
   assert.match(articleHtml, /property="og:image:type" content="image\/png"/);
-  assert.match(articleHtml, /property="og:image:width" content="1731"/);
-  assert.match(articleHtml, /property="og:image:height" content="909"/);
+  assert.match(articleHtml, /property="og:image:width" content="1200"/);
+  assert.match(articleHtml, /property="og:image:height" content="630"/);
+  assert.match(articleHtml, /\/og\/articles\/l-[0-9A-HJKMNP-TV-Z]{12}\/\d+-[a-f0-9]{16}\.png/);
   assert.match(articleHtml, /property="og:locale" content="en"/);
   assert.match(articleHtml, /name="twitter:card" content="summary_large_image"/);
   assert.match(articleHtml, /name="twitter:image"/);
   assert.match(articleHtml, /rel="alternate" type="text\/markdown"/);
   assert.match(articlePage.headers.get("link"), /shape-of-a-working-idea\.md/);
+  assert.match(articleHtml, /id="page-data" type="application\/json"/);
+  assert.match(articleHtml, /scripts\/cookies\.js/);
+  const articleOgPath = /property="og:image" content="http:\/\/127\.0\.0\.1:\d+(\/og\/articles\/[^"?]+)"/.exec(articleHtml)?.[1];
+  assert.ok(articleOgPath);
+  const articleOg = await fetch(`${baseUrl}${articleOgPath}`);
+  assert.equal(articleOg.status, 200);
+  assert.equal(articleOg.headers.get("content-type"), "image/png");
+  assert.match(articleOg.headers.get("cache-control"), /immutable/);
   assert.doesNotMatch(articleHtml, /Generated text version/);
-  assert.match(articleHtml, /"author":\{"@type":"Person","identifier":"c31e1b26","name":"c31e1b26","url":"http:\/\/127\.0\.0\.1:\d+\/about"\}/);
+  assert.match(articleHtml, /"@type":"Person","@id":"http:\/\/127\.0\.0\.1:\d+\/about#person","identifier":"c31e1b26","name":"c31e1b26","url":"http:\/\/127\.0\.0\.1:\d+\/about"/);
+  assert.match(articleHtml, /"author":\{"@id":"http:\/\/127\.0\.0\.1:\d+\/about#person"\}/);
   const aboutHtml = await (await fetch(`${baseUrl}/about`)).text();
   assert.match(aboutHtml, /Mara Ellison/);
   assert.match(aboutHtml, /data-about-title>about me<\/h1>/);
@@ -957,6 +972,33 @@ test("HTTP routes, clean article URLs and protected admin mutations work", async
   assert.equal(v2Articles.items.length, 2);
   assert.ok(v2Articles.nextCursor);
   assert.match(v2Articles.items[0].contentUrl, /\.md$/);
+  const telemetryWithoutConsent = await fetch(`${baseUrl}/api/telemetry/collect`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+  });
+  assert.equal(telemetryWithoutConsent.status, 403);
+  const telemetryPayload = {
+    event: "page_view", occurredAt: new Date().toISOString(), path: "/journal",
+    visitorId: crypto.randomUUID(), sessionId: crypto.randomUUID(), referrerOrigin: "",
+    language: "en", viewportClass: "desktop",
+  };
+  const telemetryAccepted = await fetch(`${baseUrl}/api/telemetry/collect`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: "laboratory_consent=accepted.2026-09-16.1" },
+    body: JSON.stringify(telemetryPayload),
+  });
+  assert.equal(telemetryAccepted.status, 204);
+  assert.equal(app.locals.laboratory.publicTelemetry.status().storedEvents, 1);
+  const telemetryColumns = app.locals.laboratory.store.db.prepare("PRAGMA table_info(public_telemetry_events)").all().map((column) => column.name);
+  assert.ok(!telemetryColumns.some((column) => /ip|user_agent/i.test(column)));
+  const telemetryWrongOrigin = await fetch(`${baseUrl}/api/telemetry/collect`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json", Cookie: "laboratory_consent=accepted.2026-09-16.1",
+      Origin: "https://untrusted.example",
+    },
+    body: JSON.stringify({ ...telemetryPayload, occurredAt: new Date().toISOString() }),
+  });
+  assert.equal(telemetryWrongOrigin.status, 403);
   const evidenceStateBefore = app.locals.laboratory.store.db.prepare(
     "SELECT revision_id, index_key, indexed_at FROM public_evidence_revision_state ORDER BY revision_id",
   ).all();
@@ -970,18 +1012,28 @@ test("HTTP routes, clean article URLs and protected admin mutations work", async
   ).all("working");
   assert.match(searchPlan.map((step) => step.detail).join(" "), /VIRTUAL TABLE INDEX/);
 
+  const rejectedMcpOrigin = await fetch(`${baseUrl}/mcp`, { method: "OPTIONS", headers: { Origin: "https://untrusted.example" } });
+  assert.equal(rejectedMcpOrigin.status, 403);
+  const acceptedMcpOrigin = await fetch(`${baseUrl}/mcp`, { method: "OPTIONS", headers: { Origin: baseUrl } });
+  assert.equal(acceptedMcpOrigin.status, 204);
+  assert.equal(acceptedMcpOrigin.headers.get("access-control-allow-origin"), baseUrl);
+
   const mcpClient = new Client({ name: "laboratory-test-client", version: "1.0.0" });
   const mcpTransport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`));
   await mcpClient.connect(mcpTransport);
   try {
     const tools = await mcpClient.listTools();
-    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), ["get_publication", "list_publications", "search_publications"]);
+    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), ["get_evidence", "get_publication", "list_publications", "search_publications"]);
     assert.ok(tools.tools.every((tool) => tool.annotations?.readOnlyHint === true));
     const listed = await mcpClient.callTool({ name: "list_publications", arguments: { limit: 2 } });
     assert.equal(listed.isError, undefined);
     assert.equal(listed.structuredContent.items.length, 2);
     const resources = await mcpClient.listResources();
     assert.ok(resources.resources.some((resource) => resource.uri === "laboratory://catalog"));
+    assert.ok(resources.resources.some((resource) => resource.uri === "laboratory://site"));
+    assert.ok(resources.resources.some((resource) => resource.uri === "laboratory://about"));
+    const resourceTemplates = await mcpClient.listResourceTemplates();
+    assert.ok(resourceTemplates.resourceTemplates.some((resource) => resource.uriTemplate === "laboratory://evidence/{evidenceId}"));
     const catalogResource = await mcpClient.readResource({ uri: "laboratory://catalog" });
     assert.match(catalogResource.contents[0].text, /shape-of-a-working-idea/);
   } finally {
@@ -1092,6 +1144,7 @@ test("HTTP routes, clean article URLs and protected admin mutations work", async
   assert.ok(evidence.items.some((item) => item.articleId === importedBody.article.internalId));
   assert.ok(evidence.items.every((item) => item.verified === true && item.sourceTextHash?.startsWith("sha256:")));
   assert.ok(evidence.items.every((item) => item.sourceTextHash === evidenceTextHash(item.text)));
+  assert.equal(app.locals.laboratory.evidenceIndex.get(evidence.items[0].id, baseUrl).id, evidence.items[0].id);
   const v2Evidence = await (await fetch(`${baseUrl}/api/public/v2/evidence?q=created`)).json();
   assert.equal(v2Evidence.items, undefined);
   assert.ok(v2Evidence.articles.some((article) => article.id === importedBody.article.internalId));

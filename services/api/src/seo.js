@@ -129,6 +129,8 @@ function injectHead(template, {
   type = "website",
   image = canonicalUrl(new URL(canonical).origin, "/og.png"),
   imageAlt = "Laboratory — independent studies, notes and published work",
+  imageWidth = 1731,
+  imageHeight = 909,
   authorName = "",
   siteName = "Laboratory",
   markdown = "",
@@ -155,8 +157,8 @@ function injectHead(template, {
     `<meta property="og:image" content="${escapeHtml(image)}" />`,
     ...(image.startsWith("https://") ? [`<meta property="og:image:secure_url" content="${escapeHtml(image)}" />`] : []),
     `<meta property="og:image:type" content="image/png" />`,
-    `<meta property="og:image:width" content="1731" />`,
-    `<meta property="og:image:height" content="909" />`,
+    `<meta property="og:image:width" content="${imageWidth}" />`,
+    `<meta property="og:image:height" content="${imageHeight}" />`,
     `<meta property="og:image:alt" content="${escapeHtml(imageAlt)}" />`,
     `<meta name="twitter:card" content="summary_large_image" />`,
     `<meta name="twitter:title" content="${escapeHtml(title)}" />`,
@@ -199,7 +201,11 @@ export function renderHomePage(template, { content, baseUrl, nonce, authorName }
   html = replaceText(html, /(<h1\s+id="heroTitle"[^>]*>)[\s\S]*?(<\/h1>)/, `$1${escapeHtml(content.heroTitle)}$2`);
   html = replaceText(html, /(<p\s+id="heroSubtitle"[^>]*>)[\s\S]*?(<\/p>)/, `$1${escapeHtml(content.heroSubtitle)}$2`);
   html = replaceText(html, /(<span\s+id="aboutLabel"[^>]*>)[\s\S]*?(<\/span>)/, `$1${escapeHtml(content.pages.about.title)}$2`);
-  return replaceText(html, /(<span\s+id="journalLabel"[^>]*>)[\s\S]*?(<\/span>)/, `$1${escapeHtml(content.pages.journal.title)}$2`);
+  html = replaceText(html, /(<span\s+id="journalLabel"[^>]*>)[\s\S]*?(<\/span>)/, `$1${escapeHtml(content.pages.journal.title)}$2`);
+  return html.replace(
+    "<!-- ssr:page-data -->",
+    `<script id="page-data" type="application/json" nonce="${escapeHtml(nonce)}">${jsonForHtml({ content })}</script>`,
+  );
 }
 
 export function renderAboutPage(template, { content, about, baseUrl, nonce, authorName }) {
@@ -275,7 +281,11 @@ export function renderJournalPage(template, { content, articles, baseUrl, nonce,
   });
   html = replaceSiteTitle(html, content.siteTitle);
   html = replaceText(html, /(<h1\s+class="journal-title dynamic-text"\s+data-journal-title>)[\s\S]*?(<\/h1>)/, `$1${escapeHtml(content.pages.journal.title)}$2`);
-  return html.replace("<!-- ssr:journal-list -->", journalLinks(articles));
+  html = html.replace("<!-- ssr:journal-list -->", journalLinks(articles));
+  return html.replace(
+    "<!-- ssr:page-data -->",
+    `<script id="page-data" type="application/json" nonce="${escapeHtml(nonce)}">${jsonForHtml({ content, articles })}</script>`,
+  );
 }
 
 function readableDate(value) {
@@ -303,29 +313,75 @@ function articleDerivedMarkup(article) {
   ].filter(Boolean).join("\n");
 }
 
-export function renderArticlePage(template, { content, article, baseUrl, nonce, authorName }) {
+export function renderArticlePage(template, { content, article, baseUrl, nonce, authorName, socialImagePath = "/og.png" }) {
   const pathname = `/journal/${encodeURIComponent(article.slug)}`;
   const canonical = canonicalUrl(baseUrl, pathname);
   const description = articleDescription(article, content.siteTitle);
   const authorUrl = canonicalUrl(baseUrl, "/about");
-  const socialImage = canonicalUrl(baseUrl, "/og.png");
-  const schema = {
-    "@context": "https://schema.org",
+  const rootUrl = canonicalUrl(baseUrl, "/");
+  const socialImage = canonicalUrl(baseUrl, socialImagePath);
+  const authorId = `${authorUrl}#person`;
+  const publisherId = authorName ? authorId : `${rootUrl}#publisher`;
+  const articleSchema = {
     "@type": "Article",
+    "@id": `${canonical}#article`,
     headline: article.title,
     description,
     datePublished: article.publishedAt,
     dateModified: article.revisedAt || article.publishedAt,
-    mainEntityOfPage: canonical,
+    mainEntityOfPage: { "@id": `${canonical}#webpage` },
     url: canonical,
-    image: socialImage,
+    image: { "@id": `${canonical}#primaryimage` },
     inLanguage: content.language || "en",
-    publisher: authorName
-      ? { "@type": "Person", name: authorName, url: authorUrl }
-      : { "@type": "Organization", name: content.siteTitle, url: canonicalUrl(baseUrl, "/") },
+    publisher: { "@id": publisherId },
+    ...(authorName ? { author: { "@id": authorId } } : {}),
   };
-  if (authorName) schema.author = { "@type": "Person", identifier: authorName, name: authorName, url: authorUrl };
-  if (article.metadata?.sources?.length) schema.citation = article.metadata.sources.map((source) => source.url);
+  if (article.metadata?.sources?.length) articleSchema.citation = article.metadata.sources.map((source) => source.url);
+  const schema = {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": `${rootUrl}#website`,
+        name: content.siteTitle,
+        url: rootUrl,
+        inLanguage: content.language || "en",
+        publisher: { "@id": publisherId },
+      },
+      authorName
+        ? { "@type": "Person", "@id": authorId, identifier: authorName, name: authorName, url: authorUrl }
+        : { "@type": "Organization", "@id": publisherId, name: content.siteTitle, url: rootUrl },
+      {
+        "@type": "WebPage",
+        "@id": `${canonical}#webpage`,
+        url: canonical,
+        name: article.title,
+        isPartOf: { "@id": `${rootUrl}#website` },
+        primaryImageOfPage: { "@id": `${canonical}#primaryimage` },
+        breadcrumb: { "@id": `${canonical}#breadcrumb` },
+        inLanguage: content.language || "en",
+      },
+      {
+        "@type": "ImageObject",
+        "@id": `${canonical}#primaryimage`,
+        url: socialImage,
+        contentUrl: socialImage,
+        width: 1200,
+        height: 630,
+        caption: article.title,
+      },
+      {
+        "@type": "BreadcrumbList",
+        "@id": `${canonical}#breadcrumb`,
+        itemListElement: [
+          { "@type": "ListItem", position: 1, name: content.siteTitle, item: rootUrl },
+          { "@type": "ListItem", position: 2, name: content.pages.journal.title, item: canonicalUrl(baseUrl, "/journal") },
+          { "@type": "ListItem", position: 3, name: article.title, item: canonical },
+        ],
+      },
+      articleSchema,
+    ],
+  };
   let html = injectHead(template, {
     title: `${article.title} — ${content.siteTitle}`,
     description,
@@ -335,6 +391,8 @@ export function renderArticlePage(template, { content, article, baseUrl, nonce, 
     type: "article",
     image: socialImage,
     imageAlt: `${article.title} — ${content.siteTitle}`,
+    imageWidth: 1200,
+    imageHeight: 630,
     authorName,
     siteName: content.siteTitle,
     markdown: canonicalUrl(baseUrl, `${pathname}.md`),
@@ -347,9 +405,17 @@ export function renderArticlePage(template, { content, article, baseUrl, nonce, 
     ? article.bodyHtml || ""
     : `<p class="pdf-loading"><a href="${escapeHtml(article.pdfUrl)}">Open the source PDF</a>.</p>`;
   html = html.replace("<!-- ssr:article-document -->", documentHtml);
-  html = html.replace("<!-- ssr:article-abstract -->", articleDerivedMarkup(article));
+  const derivedMarkup = articleDerivedMarkup(article);
+  html = html.replace("<!-- ssr:article-abstract -->", derivedMarkup);
+  if (derivedMarkup) {
+    html = html.replace('class="article-end"', 'class="article-end has-derived"');
+    html = html.replace("aria-label=\"Show abstract and transcript\" hidden", "aria-label=\"Show abstract and transcript\"");
+  }
   if (article.format === "markdown") html = html.replace('class="article-document"', 'class="article-document article-markdown"');
-  return html;
+  return html.replace(
+    "<!-- ssr:page-data -->",
+    `<script id="page-data" type="application/json" nonce="${escapeHtml(nonce)}">${jsonForHtml({ content, article })}</script>`,
+  );
 }
 
 function xmlDocument(body) {

@@ -106,7 +106,9 @@ window.addEventListener("pageshow", (event) => {
 async function initialize() {
   if ("scrollRestoration" in history) history.scrollRestoration = "manual";
   window.scrollTo(0, 0);
-  const content = await api("/api/content");
+  const pageDataElement = document.getElementById("page-data");
+  const pageData = pageDataElement ? JSON.parse(pageDataElement.textContent) : null;
+  const content = pageData?.content || await api("/api/content");
   applySiteChrome(content);
   bindThemeControls();
   document.getElementById("heroTitle").textContent = content.heroTitle;

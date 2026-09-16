@@ -27,14 +27,17 @@
         <p class="article-publication-date" data-article-date></p>
       </header>
       <section class="article-document" data-article-document aria-live="polite"><!-- ssr:article-document --></section>
-      <div class="article-abstract-slot" data-article-abstract><!-- ssr:article-abstract --></div>
+      <div id="article-derived-content" class="article-abstract-slot" data-article-abstract><!-- ssr:article-abstract --></div>
       <div class="pdf-placeholder" data-article-error hidden>
         <p>This article could not be loaded.</p>
       </div>
       <footer class="article-end">
+        <button class="article-derived-toggle" type="button" data-article-derived-toggle aria-expanded="false" aria-controls="article-derived-content" aria-label="Show abstract and transcript" hidden>+</button>
         <button class="article-back-to-top" type="button" data-back-to-top aria-label="Back to top">&#8593;</button>
       </footer>
     </main>
+    <!-- ssr:page-data -->
+    <script type="module" src="/scripts/cookies.js"></script>
     <script type="module" src="/scripts/article.js"></script>
   </body>
 </html>

@@ -15,6 +15,7 @@ export class SearchNotificationRuntime {
     this.register = register;
     this.timer = null;
     this.running = false;
+    this.lastRunAt = null;
     this.auth = config.googleIndexingExperimentEnabled
       ? new GoogleAuth({
         scopes: ["https://www.googleapis.com/auth/indexing"],
@@ -74,6 +75,30 @@ export class SearchNotificationRuntime {
 
   publicUrl() {
     return String(this.register.state.publicUrl || this.config.publicUrl || "").replace(/\/$/, "");
+  }
+
+  preflight() {
+    const publicUrl = this.publicUrl();
+    const issues = [];
+    let keyLocation = null;
+    if (!this.config.indexNowEnabled) issues.push("IndexNow is disabled");
+    if (!this.config.indexNowKey) issues.push("IndexNow ownership key is not configured");
+    if (!publicUrl) issues.push("Canonical public URL is not configured");
+    if (publicUrl) {
+      try {
+        const parsed = new URL(publicUrl);
+        if (this.config.environment === "production" && parsed.protocol !== "https:") issues.push("Production public URL must use HTTPS");
+        if (this.config.indexNowKey) keyLocation = new URL(`/${this.config.indexNowKey}.txt`, parsed).toString();
+      } catch { issues.push("Canonical public URL is invalid"); }
+    }
+    return {
+      ready: issues.length === 0,
+      enabled: this.config.indexNowEnabled,
+      keyConfigured: Boolean(this.config.indexNowKey),
+      endpoint: this.config.indexNowEndpoint,
+      keyLocation,
+      issues,
+    };
   }
 
   initializeProvider(provider, enabled) {
@@ -141,14 +166,30 @@ export class SearchNotificationRuntime {
       urlJobs[row.provider] ||= {};
       urlJobs[row.provider][row.status] = row.count;
     }
+    const recentFailures = this.db.prepare(`
+      SELECT provider, 'revision' AS jobType, CAST(revision_id AS TEXT) AS reference, attempts,
+        last_error AS lastError, updated_at AS updatedAt
+      FROM search_notification_jobs WHERE status = 'failed'
+      UNION ALL
+      SELECT provider, 'url' AS jobType, slug AS reference, attempts, last_error AS lastError, updated_at AS updatedAt
+      FROM search_notification_url_jobs WHERE status = 'failed'
+      ORDER BY updatedAt DESC LIMIT 20
+    `).all();
     return {
       publicUrlConfigured: Boolean(this.publicUrl()),
-      indexNow: { enabled: this.config.indexNowEnabled, jobs: providers.indexnow || {}, urlChanges: urlJobs.indexnow || {} },
+      lastRunAt: this.lastRunAt,
+      indexNow: {
+        ...this.preflight(),
+        jobs: providers.indexnow || {},
+        urlChanges: urlJobs.indexnow || {},
+        recentFailures: recentFailures.filter((item) => item.provider === "indexnow"),
+      },
       googleIndexingExperiment: {
         enabled: this.config.googleIndexingExperimentEnabled,
         endDate: this.config.googleIndexingExperimentEndDate || null,
         samplePercent: this.config.googleIndexingExperimentSamplePercent,
         jobs: providers["google-indexing-experiment"] || {},
+        recentFailures: recentFailures.filter((item) => item.provider === "google-indexing-experiment"),
       },
     };
   }
@@ -301,7 +342,13 @@ export class SearchNotificationRuntime {
         }
       }
     } finally {
+      this.lastRunAt = new Date().toISOString();
       this.running = false;
     }
+  }
+
+  async runNow() {
+    await this.tick();
+    return this.status();
   }
 }

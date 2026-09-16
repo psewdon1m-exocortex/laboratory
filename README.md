@@ -228,13 +228,20 @@ updated when an article is added:
 - `/mcp`, a stateless public MCP Streamable HTTP endpoint;
 - the compatible `/api/public/v1/*` endpoints for existing consumers.
 
+Each article revision also receives an immutable 1200×630 Open Graph card at
+`/og/articles/:stable-id/:revision-:background-hash.png`. It uses the configured
+global social image as its visual base and adds the article title and date. The
+global `/og.png` remains the card for Home, About and Journal.
+
 Publication, revision, canonical, visibility, deletion, derived-content and
 site-profile changes append a monotonic `public_content_events` record in the
 same database transaction. HTML and discovery routes use that journal for
 freshness validators and require intermediary revalidation. Uploaded Markdown
 headings are nested beneath the single server-rendered page H1. For PDF
-articles, the validated transcript is available to ordinary users in the
-collapsed `Text version` section as well as through the retrieval APIs.
+articles, the validated transcript is available to ordinary users as well as
+through the retrieval APIs. When an abstract or transcript exists, the
+borderless `+` control at the lower left of the reader reveals the optional
+blocks; the existing back-to-top control remains at the lower right.
 
 The Evidence API is intentionally read-only. Public evidence is materialized in
 SQLite and searched through FTS5 rather than by rescanning every article. It
@@ -245,16 +252,28 @@ instructions. Public API and MCP requests have independent per-IP fixed-window
 limits controlled by `LABORATORY_PUBLIC_API_RATE_LIMIT` (default 120/minute) and
 `LABORATORY_MCP_RATE_LIMIT` (default 60/minute).
 
-MCP exposes three read-only, idempotent tools:
+MCP exposes four read-only, idempotent, schema-versioned tools:
 
 - `list_publications` lists published work with cursor pagination;
 - `search_publications` searches verified passages and groups them by article;
 - `get_publication` returns one article by stable ID or slug with requested
   abstract, evidence, assets and/or Markdown content.
+- `get_evidence` returns one verified, addressable passage by evidence ID.
 
-It also exposes `laboratory://catalog` and the
-`laboratory://articles/{reference}` resource template. There are no mutation,
+It also exposes `laboratory://site`, `laboratory://about`,
+`laboratory://catalog`, `laboratory://articles/{reference}` and
+`laboratory://evidence/{evidenceId}`. Resource enumeration follows cursor pages
+instead of truncating the catalog at 100 records. Browser CORS is limited to
+the public origin and `LABORATORY_MCP_ALLOWED_ORIGINS`; non-browser MCP clients
+without an Origin header remain supported. There are no mutation,
 administration or publication tools on the public MCP endpoint.
+
+Public pages show a minimalist first-party cookie notice. Nothing is collected
+before `Accept`. After acceptance the raw collector stores only allowlisted
+events, pseudonymous visitor/session UUIDs, public path, timestamp, referrer
+origin, language and viewport class. It stores no IP address or User-Agent,
+does no profiling or aggregation, and deletes raw rows after
+`LABORATORY_PUBLIC_TELEMETRY_RETENTION_DAYS` (30 by default).
 
 `robots.txt` permits public search agents and explicitly permits
 `Google-Extended`, while private/admin paths remain disallowed. GPTBot,
@@ -295,7 +314,22 @@ through `POST /api/admin/articles/:id/derivatives/regenerate`.
 
 IndexNow is available for new published revisions when
 `LABORATORY_INDEXNOW_ENABLED=true` and `LABORATORY_INDEXNOW_KEY` is configured.
-The key proof file is served automatically.
+The key proof file is served automatically. Generate a production key without
+writing it to the repository:
+
+```bash
+cd services/api
+npm run indexnow:key
+```
+
+Put the output in production configuration, set the canonical public HTTPS URL,
+then enable the flag. Before the first run, verify
+`https://<canonical-host>/<key>.txt` returns the exact key. The authenticated
+`GET /api/admin/search-notifications` endpoint reports preflight state, queue
+counts and recent failures; `POST /api/admin/search-notifications/run` triggers
+an immediate queue pass. New revisions and tombstones from slug changes,
+unpublishing and deletion are queued automatically. Ordinary CSS deployments
+do not create notification jobs.
 
 The Google Indexing API path is an isolated research feature. Google officially
 supports that API only for `JobPosting` and livestream `BroadcastEvent` pages,

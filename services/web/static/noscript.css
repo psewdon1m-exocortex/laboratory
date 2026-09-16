@@ -31,3 +31,8 @@
   pointer-events: auto !important;
   white-space: normal;
 }
+
+.article-derived-toggle,
+.cookie-notice {
+  display: none !important;
+}

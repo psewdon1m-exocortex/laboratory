@@ -401,7 +401,11 @@ function bindControls() {
 }
 
 async function initialize() {
-  const [content, articleResponse] = await Promise.all([api("/api/content"), api("/api/articles?sort=newest")]);
+  const pageDataElement = document.getElementById("page-data");
+  const pageData = pageDataElement ? JSON.parse(pageDataElement.textContent) : null;
+  const [content, articleResponse] = pageData
+    ? [pageData.content, { items: pageData.articles }]
+    : await Promise.all([api("/api/content"), api("/api/articles?sort=newest")]);
   const title = content.pages.journal.title;
   applySiteChrome(content, title);
   bindThemeControls();

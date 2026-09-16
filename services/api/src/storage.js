@@ -18,7 +18,7 @@ const DEFAULT_SETTINGS = {
   noiseGrain: "55",
 };
 
-export const DATABASE_SCHEMA_VERSION = 7;
+export const DATABASE_SCHEMA_VERSION = 8;
 
 export const UPLOAD_SLOTS = {
   heroImage: { kind: "image", maxBytes: 25 * 1024 * 1024 },
@@ -186,6 +186,20 @@ export class LaboratoryStore {
       );
       CREATE INDEX IF NOT EXISTS idx_public_content_events_scope
       ON public_content_events(scope, entity_id, id DESC);
+      CREATE TABLE IF NOT EXISTS public_telemetry_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_type TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        page_path TEXT NOT NULL,
+        visitor_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        referrer_origin TEXT,
+        language TEXT NOT NULL,
+        viewport_class TEXT NOT NULL CHECK(viewport_class IN ('mobile', 'tablet', 'desktop'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_public_telemetry_received
+      ON public_telemetry_events(received_at DESC);
       CREATE TABLE IF NOT EXISTS assets (
         slot TEXT PRIMARY KEY,
         filename TEXT NOT NULL,

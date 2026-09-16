@@ -53,15 +53,36 @@ Create a separate Volt entry/field for every value below and bind the Register k
 
 IndexNow's verification key is intentionally public and is not an access credential. In Laboratory it is an optional environment setting. GitHub, Saturn, Gemini and Google private credentials are resolved through Kernel, remain in memory and are excluded from backups/log exports. The Kernel URL and initial machine token are the bootstrap exception; subsequent Laboratory connection edits are encrypted locally and excluded from portable recovery.
 
+### IndexNow production activation
+
+Application support is installed but disabled by default. Generate the ownership
+key from a trusted checkout:
+
+```bash
+cd services/api
+npm run indexnow:key
+```
+
+Store the printed value in the production environment as
+`LABORATORY_INDEXNOW_KEY`, set `LABORATORY_INDEXNOW_ENABLED=true`, and deploy.
+The canonical public URL continues to come from Kernel Register. Before running
+the queue, fetch `https://<canonical-host>/<key>.txt` externally and confirm the
+body is exactly the key. Then authenticate to the private API, inspect
+`GET /api/admin/search-notifications`, and invoke
+`POST /api/admin/search-notifications/run` with the normal CSRF token. A ready
+preflight plus `accepted` jobs proves provider receipt only; indexing must be
+verified separately in the search-engine consoles. Recent errors are exposed
+without the ownership key or private credentials.
+
 ## Agents and public activation
 
 In the head's Settings, initialize Neptune with a one-time archive setup code issued in Saturn. One host daemon can serve the existing projects and both new heads. Saturn → Synchronization owns desired schedules, manual remote runs and run receipts. A saved schedule or installed binary is not proof of a successful backup: inspect enrolled/linked state, last seen, last successful backup, next due and overdue status separately. Revoke old credentials in their issuer and reconnect using a newly issued code; do not reuse an already consumed code.
 
-Laboratory does not consume Gryphon. Test a signed GitHub webhook on the registered branch, import a Markdown/PDF source, and confirm draft/public transitions and immutable Saturn assets. If AI is enabled, verify a real Gemini generation before declaring it operational.
+Laboratory does not consume Gryphon. Test a signed GitHub webhook on the registered branch, import a Markdown/PDF source, and confirm unpublished/published transitions and immutable Saturn assets. If AI is enabled, verify a real Gemini generation before declaring it operational.
 
 Use nginx.server.example.conf as the service-specific server configuration template. It is an example for the operator-managed nginx, not a proxy installed by this service. Configure an independent default server rejecting unknown Host/SNI, exact server_name and certificate pair, then run nginx -t. The template binds only the intended upstream, forwards Host/proto/client identity, denies machine-only routes, and sets route-specific upload limits/timeouts with bounded server staging. No coturn is installed. Login remains reachable from every client IP; public articles/About/Journal are indexable and private/admin surfaces are noindex.
 
-Run public checks from two independent external clients after nginx configuration: DNS/TLS/SNI; correct canonical links; unauthenticated private API refusal; draft file refusal; CSRF and logout replay rejection; no direct 18380/database port; oversized upload 413. Unknown/stale telemetry is not zero. /api/health reports core database/Register readiness; authenticated /api/ready reports the required agents/dependencies. It explicitly does not claim external provider delivery.
+Run public checks from two independent external clients after nginx configuration: DNS/TLS/SNI; correct canonical links; unauthenticated private API refusal; unpublished file refusal; CSRF and logout replay rejection; no direct 18380/database port; oversized upload 413. Unknown/stale telemetry is not zero. /api/health reports core database/Register readiness; authenticated /api/ready reports the required agents/dependencies. It explicitly does not claim external provider delivery.
 
 ## Recovery and acceptance
 

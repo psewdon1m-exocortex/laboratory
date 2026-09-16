@@ -16,7 +16,7 @@ New backups use `exocortex.laboratory.backup.v3` inside `exocortex.laboratory.ba
 
 The manifest inventories every member with its uncompressed size and SHA-256. The logical data member also records row counts per authoritative collection.
 
-The Access Key verifier and session generation are included as recovery metadata. Restore revokes existing sessions and retains the target machine enrollment. Plaintext secrets, session cookies, `.env`, Kernel Register cache, the rebuildable FTS evidence index, transient restore staging, pre-restore checkpoints and audit logs are intentionally excluded. Audit records have a separate manifest/checksum ZIP export in `/private`; they must be shipped or archived by the operator if longer retention is required.
+The Access Key verifier and session generation are included as recovery metadata. Restore revokes existing sessions and retains the target machine enrollment. Plaintext secrets, session cookies, `.env`, Kernel Register cache, the rebuildable FTS evidence index, raw public telemetry, transient restore staging, pre-restore checkpoints and audit logs are intentionally excluded. Telemetry is deliberately local and retention-bounded; audit records have a separate manifest/checksum ZIP export in `/private` and must be shipped or archived by the operator if longer retention is required.
 
 ## Safety limits and validation
 

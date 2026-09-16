@@ -829,6 +829,10 @@ a {
   background: var(--bg);
 }
 
+.js .article-abstract-slot:not(.is-open) {
+  display: none;
+}
+
 .article-abstract-slot:empty {
   display: none;
 }
@@ -1082,7 +1086,35 @@ a {
 .article-end {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
   padding-top: clamp(34px, 6vh, 72px);
+}
+
+.article-end.has-derived {
+  justify-content: space-between;
+}
+
+.article-derived-toggle {
+  min-width: 44px;
+  min-height: 52px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  color: var(--fg);
+  background: transparent;
+  font: inherit;
+  font-size: 1.4rem;
+  font-weight: 400;
+  line-height: 1;
+  text-align: left;
+  cursor: pointer;
+  transition: color 180ms ease, transform 180ms ease;
+}
+
+.article-derived-toggle:hover,
+.article-derived-toggle:focus-visible {
+  color: var(--muted);
+  transform: translateY(-2px);
 }
 
 .article-back-to-top {
@@ -1103,6 +1135,48 @@ a {
   color: var(--bg);
   background: var(--fg);
   transform: translateY(-3px);
+}
+
+.cookie-notice {
+  position: fixed;
+  left: var(--page-inset);
+  right: var(--page-inset);
+  bottom: 14px;
+  z-index: 240;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 44px;
+  border-top: 1px solid var(--line);
+  padding: 10px 0 0;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  backdrop-filter: blur(12px);
+}
+
+.cookie-notice p {
+  margin: 0;
+}
+
+.cookie-notice button {
+  flex: 0 0 auto;
+  border: 0;
+  padding: 4px 0;
+  color: var(--fg);
+  background: transparent;
+  font: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.cookie-notice button:hover,
+.cookie-notice button:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 /* Admin */
@@ -2052,6 +2126,14 @@ button.admin-article-row:focus-visible {
   .article-reader {
     width: calc(100% - 24px);
     padding-top: 100px;
+  }
+
+  .cookie-notice {
+    left: 14px;
+    right: 14px;
+    bottom: 10px;
+    gap: 14px;
+    font-size: 0.7rem;
   }
 
   .article-reader-title {

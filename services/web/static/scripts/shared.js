@@ -36,7 +36,7 @@ export function setTheme(mode, persist = true) {
     } catch {}
   }
   updateThemeButtons();
-  window.dispatchEvent(new CustomEvent("laboratory-theme-change", { detail: { mode, resolved } }));
+  window.dispatchEvent(new CustomEvent("laboratory-theme-change", { detail: { mode, resolved, persist } }));
 }
 
 function updateThemeButtons() {

@@ -26,8 +26,10 @@ import { GitHubArticleLibrary } from "./github-library.js";
 import { KernelRegisterRuntime } from "./kernel-register.js";
 import { loadKernelConnection, saveKernelConnection } from "./kernel-connection.js";
 import { createNeptuneClient } from "./neptune-client.js";
+import { generateArticleOg } from "./og-image.js";
 import { handleMcpRequest, mcpCors } from "./mcp.js";
 import { FixedWindowRateLimiter, publicCors, registerPublicApi } from "./public-api.js";
+import { PublicTelemetry, hasTelemetryConsent } from "./public-telemetry.js";
 import {
   articleDescription,
   buildArticlesSitemap,
@@ -101,6 +103,15 @@ export async function createLaboratoryApp(overrides = {}) {
     filename,
     fs.readFileSync(path.join(config.publicDir, filename), "utf8"),
   ]));
+  const defaultSocialImage = fs.readFileSync(path.join(config.publicDir, "og.png"));
+  const defaultSocialImageHash = crypto.createHash("sha256").update(defaultSocialImage).digest("hex");
+  const articleOgCache = new Map();
+  const socialImageSource = async () => {
+    const uploaded = await store.readAsset("socialImage");
+    return uploaded ? { data: uploaded.data, sha256: uploaded.sha256 } : { data: defaultSocialImage, sha256: defaultSocialImageHash };
+  };
+  const articleOgVersion = (imageHash, siteTitle) => crypto.createHash("sha256").update(`${imageHash}:${siteTitle}`).digest("hex").slice(0, 16);
+  const articleOgPath = (article, version) => `/og/articles/${article.internalId}/${article.revision}-${version}.png`;
   const content = () => ({ ...store.getContent(), language: config.defaultLanguage });
   const baseUrl = (req) => publicBaseUrl(req, config, register);
   const publishedArticles = () => store.listArticles({ sort: "newest" });
@@ -125,6 +136,7 @@ export async function createLaboratoryApp(overrides = {}) {
     return markdown ? markdown.data.toString("utf8") : "";
   };
   const evidenceIndex = new EvidenceIndex(store, { language: config.defaultLanguage });
+  const publicTelemetry = new PublicTelemetry(store.db, { retentionDays: config.publicTelemetryRetentionDays });
   const agentCatalog = new AgentCatalog({
     store, evidenceIndex, config, content, aboutPage, readAboutMarkdown,
   });
@@ -236,8 +248,20 @@ export async function createLaboratoryApp(overrides = {}) {
   }
   const publicApiLimiter = new FixedWindowRateLimiter({ limit: config.publicApiRateLimit, windowMs: 60_000 });
   const mcpLimiter = new FixedWindowRateLimiter({ limit: config.mcpRateLimit, windowMs: 60_000 });
+  const telemetryLimiter = new FixedWindowRateLimiter({ limit: config.publicTelemetryRateLimit, windowMs: 60_000 });
   app.use("/api/public", publicCors, publicApiLimiter.middleware(requestKey));
-  app.use("/mcp", mcpCors, mcpLimiter.middleware(requestKey));
+  app.use("/mcp", mcpCors({ publicUrl: config.publicUrl, allowedOrigins: config.mcpAllowedOrigins }), mcpLimiter.middleware(requestKey));
+
+  app.post("/api/telemetry/collect", telemetryLimiter.middleware(requestKey), (req, res, next) => {
+    try {
+      res.setHeader("Cache-Control", "no-store");
+      if (!hasTelemetryConsent(req)) return res.status(403).json({ error: "Telemetry consent is required" });
+      const requestOrigin = req.get("Origin");
+      if (requestOrigin && requestOrigin !== baseUrl(req)) return res.status(403).json({ error: "Invalid telemetry origin" });
+      publicTelemetry.collect(req.body);
+      res.status(204).end();
+    } catch (error) { next(error); }
+  });
 
   app.get("/api/live", (_req, res) => res.json({ status: "ok", service: "laboratory", level: "liveness" }));
 
@@ -465,10 +489,20 @@ export async function createLaboratoryApp(overrides = {}) {
         contentLibrary: githubLibrary.status(),
         derivedContent: derivedContent.status(),
         searchNotifications: searchNotifications.status(),
+        publicTelemetry: publicTelemetry.status(),
         publicUrl: register.state.publicUrl,
         updater: await updater.status(),
       },
     });
+  });
+
+  app.get("/api/admin/search-notifications", auth.requireAdmin, (_req, res) => {
+    res.json(searchNotifications.status());
+  });
+
+  app.post("/api/admin/search-notifications/run", auth.requireMutation, async (_req, res, next) => {
+    try { res.json(await searchNotifications.runNow()); }
+    catch (error) { next(error); }
   });
 
   app.put("/api/admin/security/kernel", auth.requireMutation, async (req, res, next) => {
@@ -772,6 +806,34 @@ export async function createLaboratoryApp(overrides = {}) {
     } catch (error) { next(error); }
   });
 
+  app.get(/^\/og\/articles\/(l-[0-9A-HJKMNP-TV-Z]{12})\/(\d+)-([a-f0-9]{16})\.png$/, async (req, res, next) => {
+    try {
+      const article = store.getArticle(req.params[0]);
+      if (!article || article.revision !== Number(req.params[1])) return res.status(404).end();
+      const source = await socialImageSource();
+      const siteTitle = content().siteTitle;
+      const version = articleOgVersion(source.sha256, siteTitle);
+      if (version !== req.params[2]) return res.status(404).end();
+      const cacheKey = `${article.internalId}:${article.revision}:${version}`;
+      let image = articleOgCache.get(cacheKey);
+      if (!image) {
+        image = await generateArticleOg({
+          background: source.data,
+          title: article.title,
+          siteTitle,
+          publishedAt: article.publishedAt,
+          articleId: article.internalId,
+        });
+        if (articleOgCache.size >= 64) articleOgCache.delete(articleOgCache.keys().next().value);
+        articleOgCache.set(cacheKey, image);
+      }
+      res.setHeader("Content-Type", "image/png");
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      res.setHeader("ETag", `"${crypto.createHash("sha256").update(image).digest("base64url")}"`);
+      res.send(image);
+    } catch (error) { next(error); }
+  });
+
   app.use("/api/media", (req, res, next) => {
     let relative;
     try { relative = decodeURIComponent(req.path).replace(/^\/+/, ""); }
@@ -907,24 +969,29 @@ export async function createLaboratoryApp(overrides = {}) {
       authorName: config.defaultAuthorName,
     }));
   });
-  app.get(/^\/journal\/([^/]+)\/?$/, (req, res) => {
-    const requested = decodeURIComponent(req.params[0]);
-    const article = store.getArticle(requested);
-    if (!article) {
-      res.setHeader("X-Robots-Tag", "noindex, nofollow");
-      const gone = store.library.getGoneUrl(requested);
-      if (gone?.replacementSlug) return res.redirect(308, `/journal/${encodeURIComponent(gone.replacementSlug)}`);
-      return res.status(gone ? 410 : 404).sendFile("404.html", { root: config.publicDir });
-    }
-    if (article.slug !== requested) return res.redirect(308, `/journal/${encodeURIComponent(article.slug)}`);
-    setLastModified(res, contentModifiedAt(["site", "journal"], article.internalId));
-    const remoteOrigins = article.files
-      .filter((file) => file.storageBackend === "saturn" && file.publicUrl)
-      .map((file) => new URL(file.publicUrl).origin);
-    setAgentLinks(req, res, `/journal/${encodeURIComponent(article.slug)}.md`, "", remoteOrigins);
-    sendText(res, "text/html; charset=utf-8", renderArticlePage(templates.get("article.html"), {
-      content: content(), article, baseUrl: baseUrl(req), nonce: req.cspNonce, authorName: config.defaultAuthorName,
-    }));
+  app.get(/^\/journal\/([^/]+)\/?$/, async (req, res, next) => {
+    try {
+      const requested = decodeURIComponent(req.params[0]);
+      const article = store.getArticle(requested);
+      if (!article) {
+        res.setHeader("X-Robots-Tag", "noindex, nofollow");
+        const gone = store.library.getGoneUrl(requested);
+        if (gone?.replacementSlug) return res.redirect(308, `/journal/${encodeURIComponent(gone.replacementSlug)}`);
+        return res.status(gone ? 410 : 404).sendFile("404.html", { root: config.publicDir });
+      }
+      if (article.slug !== requested) return res.redirect(308, `/journal/${encodeURIComponent(article.slug)}`);
+      setLastModified(res, contentModifiedAt(["site", "journal"], article.internalId));
+      const remoteOrigins = article.files
+        .filter((file) => file.storageBackend === "saturn" && file.publicUrl)
+        .map((file) => new URL(file.publicUrl).origin);
+      setAgentLinks(req, res, `/journal/${encodeURIComponent(article.slug)}.md`, "", remoteOrigins);
+      const socialSource = await socialImageSource();
+      const socialVersion = articleOgVersion(socialSource.sha256, content().siteTitle);
+      sendText(res, "text/html; charset=utf-8", renderArticlePage(templates.get("article.html"), {
+        content: content(), article, baseUrl: baseUrl(req), nonce: req.cspNonce, authorName: config.defaultAuthorName,
+        socialImagePath: articleOgPath(article, socialVersion),
+      }));
+    } catch (error) { next(error); }
   });
   app.get("/private", (_req, res) => {
     res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
@@ -959,7 +1026,7 @@ export async function createLaboratoryApp(overrides = {}) {
 
   app.locals.laboratory = {
     config, store, register, updater, neptune, saturnLibrary, githubLibrary, derivedContent, searchNotifications, audit,
-    evidenceIndex, agentCatalog,
+    evidenceIndex, agentCatalog, publicTelemetry,
   };
   return app;
 }

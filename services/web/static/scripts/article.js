@@ -102,13 +102,41 @@ function appendDerivedDetails(root, label, sourceHtml, headingPattern) {
 
 function renderDerivedContent(root, article) {
   root.replaceChildren();
+  const toggle = document.querySelector("[data-article-derived-toggle]");
+  const footer = toggle?.closest(".article-end");
   if (!article.abstractHtml && !(article.format === "pdf" && article.transcriptHtml)) {
     root.hidden = true;
+    if (toggle) toggle.hidden = true;
+    footer?.classList.remove("has-derived");
     return;
   }
-  root.hidden = false;
+  root.hidden = true;
+  if (toggle) toggle.hidden = false;
+  footer?.classList.add("has-derived");
   appendDerivedDetails(root, "Abstract", article.abstractHtml, /^abstract$/i);
   if (article.format === "pdf") appendDerivedDetails(root, "Text version", article.transcriptHtml, /^(?:generated\s+)?transcript$/i);
+  root.querySelectorAll("details").forEach((details) => {
+    details.addEventListener("toggle", () => {
+      if (!details.open) return;
+      const event = details.querySelector("summary")?.textContent === "Abstract" ? "abstract_open" : "transcript_open";
+      window.laboratoryTelemetry?.track(event);
+    });
+  });
+}
+
+function bindDerivedToggle(root) {
+  const toggle = document.querySelector("[data-article-derived-toggle]");
+  if (!toggle || toggle.hidden) return;
+  toggle.addEventListener("click", () => {
+    const open = toggle.getAttribute("aria-expanded") !== "true";
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.setAttribute("aria-label", open ? "Hide abstract and transcript" : "Show abstract and transcript");
+    toggle.textContent = open ? "\u2212" : "+";
+    root.hidden = !open;
+    root.classList.toggle("is-open", open);
+    root.querySelectorAll("details").forEach((details) => { details.open = open; });
+    if (open) window.laboratoryTelemetry?.track("derived_panel_open");
+  });
 }
 
 async function initialize() {
@@ -117,10 +145,14 @@ async function initialize() {
   if (!slug) throw new Error("Article not found");
   if ("scrollRestoration" in history) history.scrollRestoration = "manual";
   const savedScrollPosition = readScrollPosition(slug);
-  const [content, article] = await Promise.all([
-    api("/api/content"),
-    api(`/api/articles/${encodeURIComponent(slug)}`),
-  ]);
+  const pageDataElement = document.getElementById("page-data");
+  const pageData = pageDataElement ? JSON.parse(pageDataElement.textContent) : null;
+  const [content, article] = pageData
+    ? [pageData.content, pageData.article]
+    : await Promise.all([
+      api("/api/content"),
+      api(`/api/articles/${encodeURIComponent(slug)}`),
+    ]);
   document.querySelector("[data-article-title]").textContent = article.title;
   const date = document.querySelector("[data-article-date]");
   date.textContent = formatPublicationDate(article.publishedAt, article.revisedAt);
@@ -145,8 +177,11 @@ async function initialize() {
     await renderPdf(article.pdfUrl, root, {
       width: Math.min(1240, Math.max(280, window.innerWidth - (window.innerWidth < 760 ? 24 : 120))),
     });
+    window.laboratoryTelemetry?.track("pdf_open");
   }
-  renderDerivedContent(document.querySelector("[data-article-abstract]"), article);
+  const derivedRoot = document.querySelector("[data-article-abstract]");
+  renderDerivedContent(derivedRoot, article);
+  bindDerivedToggle(derivedRoot);
   window.addEventListener("scroll", updateProgress, { passive: true });
   window.addEventListener("resize", updateProgress);
   document.querySelector("[data-back-to-top]").addEventListener("click", () => {
