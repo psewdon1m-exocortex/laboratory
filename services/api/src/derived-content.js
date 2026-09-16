@@ -7,6 +7,7 @@ import { renderMarkdownDocument } from "./article-markdown.js";
 import { normalizeEvidenceText, plainText } from "./seo.js";
 
 const PROMPT_VERSION = "article-derivatives.v2";
+const MAX_EVIDENCE_ITEMS = 12;
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SYSTEM_INSTRUCTION_PATH = path.join(MODULE_DIR, "prompts", "article-derivatives.system.txt");
 
@@ -18,6 +19,7 @@ const RESPONSE_SCHEMA = {
     transcriptMarkdown: { anyOf: [{ type: "string" }, { type: "null" }] },
     evidence: {
       type: "array",
+      maxItems: MAX_EVIDENCE_ITEMS,
       items: {
         type: "object",
         properties: {
@@ -54,24 +56,37 @@ function cleanMarkdown(value, name, maximum) {
 
 function validateResult(value, format) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Gemini returned an invalid result object");
-  const description = String(value.description ?? "").normalize("NFC").trim();
-  if (description.length < 20 || description.length > 320) throw new Error("Generated description has an invalid length");
   const abstractMarkdown = cleanMarkdown(value.abstractMarkdown, "Generated abstract", 20_000);
+  const warnings = Array.isArray(value.warnings)
+    ? value.warnings.slice(0, 50).map((warning) => String(warning).normalize("NFC").trim()).filter(Boolean)
+    : ["Gemini returned warnings in an invalid format; the value was ignored."];
+  let description = String(value.description ?? "").normalize("NFC").trim();
+  if (description.length < 20 || description.length > 320) {
+    const abstractText = plainText(renderMarkdownDocument(abstractMarkdown)).replace(/\s+/g, " ").trim();
+    description = abstractText.length > 320 ? `${abstractText.slice(0, 319).trimEnd()}…` : abstractText;
+    if (description.length < 20) throw new Error("Generated description and abstract are too short");
+    warnings.push("Generated description had an invalid length and was rebuilt from the validated abstract.");
+  }
   let transcriptMarkdown = value.transcriptMarkdown == null ? null : cleanMarkdown(value.transcriptMarkdown, "Generated transcript", 2_000_000);
   if (format === "pdf" && !transcriptMarkdown) throw new Error("PDF generation did not return a transcript");
   if (format === "markdown") transcriptMarkdown = null;
-  if (!Array.isArray(value.evidence) || !Array.isArray(value.warnings)) throw new Error("Generated evidence or warnings are invalid");
-  const evidence = value.evidence.slice(0, 100).map((item) => {
+  const rawEvidence = Array.isArray(value.evidence) ? value.evidence : [];
+  if (!Array.isArray(value.evidence)) warnings.push("Gemini returned evidence in an invalid format; evidence was withheld.");
+  const evidence = [];
+  let malformedEvidence = 0;
+  for (const item of rawEvidence.slice(0, MAX_EVIDENCE_ITEMS)) {
     const text = String(item?.text ?? "").normalize("NFC").trim();
     const sourceLocator = String(item?.sourceLocator ?? "").normalize("NFC").trim();
     const confidence = Number(item?.confidence);
     if (text.length < 20 || text.length > 1_500 || !sourceLocator || sourceLocator.length > 240
         || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
-      throw new Error("Generated evidence item is invalid");
+      malformedEvidence += 1;
+      continue;
     }
-    return { text, sourceLocator, confidence };
-  });
-  const warnings = value.warnings.slice(0, 50).map((warning) => String(warning).normalize("NFC").trim()).filter(Boolean);
+    evidence.push({ text, sourceLocator, confidence });
+  }
+  if (malformedEvidence) warnings.push(`${malformedEvidence} malformed evidence item(s) were ignored.`);
+  if (rawEvidence.length > MAX_EVIDENCE_ITEMS) warnings.push(`${rawEvidence.length - MAX_EVIDENCE_ITEMS} evidence item(s) above the ${MAX_EVIDENCE_ITEMS}-item limit were omitted.`);
   return { description, abstractMarkdown, transcriptMarkdown, evidence, warnings };
 }
 
@@ -81,6 +96,15 @@ function tokenCoverage(source, transcript) {
   const transcriptTokens = new Set(normalizeEvidenceText(transcript).match(/[a-z0-9]{3,}/g) || []);
   const matched = [...sourceTokens].filter((token) => transcriptTokens.has(token)).length;
   return Number((matched / sourceTokens.size).toFixed(4));
+}
+
+export function markdownSectionCatalog(source) {
+  const html = renderMarkdownDocument(source || "");
+  return [...html.matchAll(/<h([1-6])\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/h\1>/gi)].map((match) => ({
+    level: Number(match[1]),
+    id: match[2],
+    heading: plainText(match[3]).replace(/\s+/g, " ").trim().slice(0, 240),
+  }));
 }
 
 async function pdfTextPages(bytes) {
@@ -393,8 +417,11 @@ export class DerivedContentRuntime {
     try {
       const task = `Create publication derivatives for \"${job.title}\". Source format: ${job.format}.`;
       const contents = [{ text: task }];
-      if (job.format === "markdown") contents.push({ text: `SOURCE MARKDOWN START\n${job.markdown_source}\nSOURCE MARKDOWN END` });
-      else {
+      if (job.format === "markdown") {
+        const sections = markdownSectionCatalog(job.markdown_source);
+        contents.push({ text: `SOURCE SECTION LOCATOR MAP\n${JSON.stringify(sections)}\nEND SOURCE SECTION LOCATOR MAP` });
+        contents.push({ text: `SOURCE MARKDOWN START\n${job.markdown_source}\nSOURCE MARKDOWN END` });
+      } else {
         const uploaded = await this.uploadedPdfPart(job);
         contents.push(uploaded.part);
         uploadedName = uploaded.name;
@@ -411,10 +438,18 @@ export class DerivedContentRuntime {
           thinkingConfig: { thinkingBudget: this.config.geminiThinkingBudget },
         },
       });
-      const usage = response.usageMetadata || null;
+      const finishReason = String(response.candidates?.[0]?.finishReason || "").trim();
+      const usage = (response.usageMetadata || finishReason)
+        ? { ...(response.usageMetadata || {}), ...(finishReason ? { finishReason } : {}) }
+        : null;
       this.db.prepare("UPDATE article_generation_jobs SET usage_json = ?, updated_at = ? WHERE revision_id = ?")
         .run(usage ? JSON.stringify(usage) : null, new Date().toISOString(), job.revision_id);
-      const parsed = JSON.parse(response.text || "");
+      if (finishReason && !["STOP", "FINISH_REASON_UNSPECIFIED"].includes(finishReason)) {
+        throw new Error(`Gemini generation ended with ${finishReason}`);
+      }
+      let parsed;
+      try { parsed = JSON.parse(response.text || ""); }
+      catch (error) { throw new Error(`Gemini returned invalid JSON${finishReason ? ` (${finishReason})` : ""}: ${error.message}`); }
       const result = { ...validateResult(parsed, job.format), usage };
       return verifyEvidence(result, job, this.library);
     } finally {

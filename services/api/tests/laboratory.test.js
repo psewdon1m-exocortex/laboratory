@@ -13,7 +13,7 @@ import { AuditLog } from "../src/audit-log.js";
 import { createSession, credentialsMatch, readSession } from "../src/auth.js";
 import { createBackup, parseBackup } from "../src/backup.js";
 import { loadConfig } from "../src/config.js";
-import { DerivedContentRuntime, verifyEvidence } from "../src/derived-content.js";
+import { DerivedContentRuntime, markdownSectionCatalog, verifyEvidence } from "../src/derived-content.js";
 import { applyLaboratoryRegister, resolveKernelValues, verifySnapshot } from "../src/kernel-register.js";
 import { createLaboratoryApp } from "../src/server.js";
 import { BOT_POLICY_VERSION, PAGE_TYPE_REGISTRY, evidenceTextHash, renderArticlePage } from "../src/seo.js";
@@ -734,7 +734,9 @@ test("derived generations use immutable versioned URLs and requeue stale prompt 
       }),
     },
   });
-  await assert.rejects(runtime.generate(job), /description has an invalid length/);
+  const repairedDescription = await runtime.generate(job);
+  assert.match(repairedDescription.description, /A valid abstract body/);
+  assert.ok(repairedDescription.warnings.some((warning) => /description had an invalid length/i.test(warning)));
   assert.deepEqual(JSON.parse(store.library.db.prepare("SELECT usage_json AS usage FROM article_generation_jobs WHERE revision_id = ?").get(job.revision_id).usage), {
     promptTokenCount: 120,
     candidatesTokenCount: 15,
@@ -834,6 +836,84 @@ test("generated evidence is published only after exact source and locator verifi
   assert.equal(result.evidence[0].verification, "exact-source-match");
   assert.match(result.evidence[0].sourceTextHash, /^sha256:/);
   assert.equal(result.validation.unsupportedClaims, 2);
+});
+
+test("Russian Markdown keeps its full AI abstract when evidence is malformed or excessive", async (context) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "laboratory-russian-derived-"));
+  const store = await LaboratoryStore.open({ dataDir, defaultsDir });
+  const runtime = new DerivedContentRuntime({
+    derivedContentEnabled: true,
+    derivedContentIntervalSeconds: 60,
+    derivedContentMaxAttempts: 3,
+    geminiModel: "gemini-test-model",
+    geminiMaxOutputTokens: 8192,
+    geminiThinkingBudget: 0,
+  }, store.library, { state: { geminiApiKey: "test-russian-key" } });
+  context.after(async () => {
+    runtime.stop();
+    store.close();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  });
+
+  const sectionBodies = Array.from({ length: 129 }, (_, index) => (
+    `## Раздел ${String.fromCharCode(0x410 + (index % 32))}\n\nПроверяемый русский фрагмент номер ${index + 1} содержит достаточно слов для точного цитирования.`
+  ));
+  const backlog = `# Laboratory — приоритетный SEO/GEO backlog\n\n${sectionBodies.join("\n\n")}`;
+  const mastermind = "# Mastermind — открытые вопросы и решения для обсуждения\n\n## Статус\n\nВсе перечисленные вопросы открыты.\n\n## Правило решений\n\nРешения фиксируются отдельно.";
+  const backlogSections = markdownSectionCatalog(backlog);
+  const mastermindSections = markdownSectionCatalog(mastermind);
+  assert.equal(backlogSections.length, 130);
+  assert.equal(new Set(backlogSections.map((section) => section.id)).size, 130);
+  assert.deepEqual(mastermindSections.map((section) => section.id), ["mastermind", "section", "section-2"]);
+
+  const imported = await store.library.importArchive(articleZip(backlog), {
+    archiveName: "Laboratory Russian SEO GEO backlog.zip",
+    status: "published",
+  });
+  runtime.enqueueMissing();
+  const revisionId = store.library.db.prepare("SELECT current_revision_id AS id FROM library_articles WHERE internal_id = ?").get(imported.article.internalId).id;
+  store.library.db.prepare("DELETE FROM article_generation_jobs WHERE revision_id <> ?").run(revisionId);
+  const job = runtime.nextJob();
+  const validEvidence = Array.from({ length: 14 }, (_, index) => ({
+    text: `Проверяемый русский фрагмент номер ${index + 1} содержит достаточно слов для точного цитирования.`,
+    sourceLocator: `section:${index === 0 ? "section" : `section-${index + 1}`}`,
+    confidence: 0.95,
+  }));
+  validEvidence.splice(1, 0, { text: "слишком коротко", sourceLocator: "section:section-2", confidence: 0.5 });
+  const fullAbstract = "# Абстракт\n\nДокумент систематизирует приоритеты развития SEO и GEO для Laboratory, отделяет критические требования публикации от последующих улучшений и сохраняет связь каждого решения с исходными условиями проекта.";
+  let request;
+  runtime.ensureAi = () => ({
+    models: {
+      generateContent: async (value) => {
+        request = value;
+        return {
+          text: JSON.stringify({
+            description: "Систематизированный backlog приоритетов SEO и GEO для Laboratory.",
+            abstractMarkdown: fullAbstract,
+            transcriptMarkdown: null,
+            evidence: validEvidence,
+            warnings: [],
+          }),
+          usageMetadata: { promptTokenCount: 9000, candidatesTokenCount: 900, totalTokenCount: 9900 },
+          candidates: [{ finishReason: "STOP" }],
+        };
+      },
+    },
+  });
+  const generated = await runtime.generate(job);
+  assert.equal(generated.abstractMarkdown, fullAbstract);
+  assert.equal(generated.evidence.length, 11);
+  assert.ok(generated.warnings.some((warning) => /malformed evidence/i.test(warning)));
+  assert.ok(generated.warnings.some((warning) => /above the 12-item limit/i.test(warning)));
+  assert.match(request.contents[1].text, /SOURCE SECTION LOCATOR MAP/);
+  assert.match(request.contents[1].text, /"id":"section-128"/);
+  assert.equal(JSON.parse(store.library.db.prepare("SELECT usage_json AS usage FROM article_generation_jobs WHERE revision_id = ?").get(job.revision_id).usage).finishReason, "STOP");
+
+  await runtime.persist(job, generated);
+  const article = store.getArticle(imported.article.internalId);
+  assert.equal(article.abstractMarkdown, fullAbstract);
+  assert.match(article.abstractHtml, /Документ систематизирует приоритеты развития SEO и GEO/);
+  assert.doesNotMatch(article.abstractHtml, /…/);
 });
 
 test("deleted article URLs are retained as tombstones and queued for IndexNow", async (context) => {

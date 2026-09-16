@@ -22,6 +22,7 @@ const articleRevisions = document.querySelector("[data-article-revisions]");
 const editorCollapse = document.querySelector("[data-editor-collapse]");
 const editorDelete = document.querySelector("[data-editor-delete]");
 const editorAi = document.querySelector("[data-editor-ai]");
+const editorAiStatus = document.querySelector("[data-editor-ai-status]");
 const accessKeyDialog = document.querySelector("[data-access-key-dialog]");
 const kernelTokenDialog = document.querySelector("[data-kernel-token-dialog]");
 const updateDialog = document.querySelector("[data-update-dialog]");
@@ -276,6 +277,20 @@ function renderArticleEditor(article) {
   syncCustomSelect(editorForm.status);
   editorForm.markdownSource.value = article.markdownSource || "";
   document.querySelector("[data-markdown-field]").hidden = article.format !== "markdown";
+  const generation = article.generationJob;
+  editorAiStatus.hidden = !generation;
+  if (generation) {
+    const usage = generation.usage || {};
+    editorAiStatus.textContent = [
+      `AI pipeline: ${generation.status}`,
+      `attempts ${generation.attempts}`,
+      usage.totalTokenCount != null ? `${usage.totalTokenCount} tokens` : "",
+      usage.finishReason ? `finish ${usage.finishReason}` : "",
+      generation.lastError ? `error: ${generation.lastError}` : "",
+    ].filter(Boolean).join(" · ");
+  } else {
+    editorAiStatus.textContent = "";
+  }
   articleFiles.replaceChildren();
   for (const file of article.files || []) {
     const row = document.createElement("div");
@@ -551,6 +566,8 @@ editorAi.addEventListener("click", async () => {
   editorAi.textContent = "Applying...";
   try {
     await mutation(`/api/admin/articles/${encodeURIComponent(selectedArticleId)}/derivatives/regenerate`, { method: "POST" });
+    editorAiStatus.hidden = false;
+    editorAiStatus.textContent = "AI pipeline: pending · attempts 0";
     showToast("AI pipeline queued. Existing generated data will be replaced.");
   } catch (error) { showToast(error.message); }
   finally {
