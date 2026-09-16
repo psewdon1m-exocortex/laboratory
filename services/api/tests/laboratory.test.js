@@ -465,6 +465,24 @@ test("direct Markdown imports one Saturn folder share and strips the capability 
   await assert.rejects(() => store.library.exportArchive(imported.article.internalId), /standalone ZIP cannot preserve/);
   await assert.rejects(() => store.library.revise(imported.article.internalId, { title: "Unsafe local rewrite" }), /GitHub Markdown source/);
 
+  github.fetchFile = async () => ({
+    buffer: Buffer.from("# Standalone Markdown\n\nNo Saturn files are referenced.\n", "utf8"),
+    sha: "standalone-markdown-blob-sha",
+  });
+  const standaloneMarkdown = await github.importPath("published/Standalone Markdown.md", "4".repeat(40), "4".repeat(40));
+  assert.equal(standaloneMarkdown.article.title, "Standalone Markdown");
+  assert.match(standaloneMarkdown.article.markdownSource, /^# Standalone Markdown/);
+  assert.equal(store.library.getAdminArticle(standaloneMarkdown.article.internalId).revisions[0].sourceManifest.saturn, undefined);
+
+  github.fetchFile = async () => ({
+    buffer: Buffer.from("# Missing Saturn share\n\n::image{media/cover.png}\n", "utf8"),
+    sha: "missing-saturn-share-blob-sha",
+  });
+  await assert.rejects(
+    () => github.importPath("published/Missing Saturn Share.md", "5".repeat(40), "5".repeat(40)),
+    /Saturn folder share URL when the article references Saturn files/,
+  );
+
   const restoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "laboratory-hybrid-restore-"));
   const restored = await LaboratoryStore.open({ dataDir: restoreDir, defaultsDir, saturnUrl: "https://saturn-restored.test" });
   try {

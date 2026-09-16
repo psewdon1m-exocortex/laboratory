@@ -46,11 +46,16 @@ function markdownSource(buffer) {
   catch { throw new Error("The GitHub article Markdown must be valid UTF-8"); }
   if (value.includes("\0")) throw new Error("The GitHub article Markdown contains invalid characters");
   const lines = value.split(/\r?\n/);
-  const sharedUrl = String(lines.shift() || "").trim();
-  if (!/^https:\/\//i.test(sharedUrl)) throw new Error("The first Markdown line must contain the Saturn folder share URL");
-  if (lines[0]?.trim() === "") lines.shift();
+  const firstLine = String(lines[0] || "").trim();
+  const sharedUrl = /^https:\/\/[^/\s]+\/s\/[A-Za-z0-9_-]{43}\/?$/i.test(firstLine) ? firstLine : "";
+  if (sharedUrl) {
+    lines.shift();
+    if (lines[0]?.trim() === "") lines.shift();
+  }
   const article = lines.join("\n").trim();
-  if (!article) throw new Error("The Markdown article is empty after its Saturn share line");
+  if (!article) throw new Error("The Markdown article is empty");
+  const remoteReference = /^\s*::(?:image|gallery|audio|video|workflow|file)\{[^}\n]*(?:media|attachments)\//im.test(article);
+  if (remoteReference && !sharedUrl) throw new Error("The first Markdown line must contain the Saturn folder share URL when the article references Saturn files");
   return { sharedUrl, article: `${article}\n` };
 }
 
@@ -230,15 +235,15 @@ export class GitHubArticleLibrary {
     };
     let parsedOrBuffer = remote.buffer;
     if (location.sourceType === "md") {
-      if (!this.saturn) throw new Error("Saturn article bundle support is not configured");
       const markdown = markdownSource(remote.buffer);
-      const bundle = await this.saturn.fetchFolder(markdown.sharedUrl);
+      if (markdown.sharedUrl && !this.saturn) throw new Error("Saturn article bundle support is not configured");
+      const bundle = markdown.sharedUrl ? await this.saturn.fetchFolder(markdown.sharedUrl) : null;
       const archive = buildArticleArchive({
         metadata: {},
-        files: [{ path: "article.md", bytes: Buffer.from(markdown.article, "utf8") }, ...bundle.files],
+        files: [{ path: "article.md", bytes: Buffer.from(markdown.article, "utf8") }, ...(bundle?.files || [])],
       });
-      parsedOrBuffer = attachRemoteFiles(parseArticleArchive(archive, { archiveName: `${titleFromSource(location.archiveName)}.zip`, status: location.status }), bundle.remoteFiles);
-      sourceManifest.saturn = bundle.manifest;
+      parsedOrBuffer = attachRemoteFiles(parseArticleArchive(archive, { archiveName: `${titleFromSource(location.archiveName)}.zip`, status: location.status }), bundle?.remoteFiles || []);
+      if (bundle) sourceManifest.saturn = bundle.manifest;
     } else if (location.sourceType === "pdf") {
       const localLimit = this.config.localAssetMaxBytes || 10 * 1024 * 1024;
       if (remote.buffer.length > localLimit) {
