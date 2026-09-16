@@ -317,6 +317,9 @@ export function renderArticlePage(template, { content, article, baseUrl, nonce, 
   const pathname = `/journal/${encodeURIComponent(article.slug)}`;
   const canonical = canonicalUrl(baseUrl, pathname);
   const description = articleDescription(article, content.siteTitle);
+  const pageArticle = article.format === "markdown" && !article.abstractHtml
+    ? { ...article, abstractHtml: `<p>${escapeHtml(description)}</p>` }
+    : article;
   const authorUrl = canonicalUrl(baseUrl, "/about");
   const rootUrl = canonicalUrl(baseUrl, "/");
   const socialImage = canonicalUrl(baseUrl, socialImagePath);
@@ -405,7 +408,7 @@ export function renderArticlePage(template, { content, article, baseUrl, nonce, 
     ? article.bodyHtml || ""
     : `<p class="pdf-loading"><a href="${escapeHtml(article.pdfUrl)}">Open the source PDF</a>.</p>`;
   html = html.replace("<!-- ssr:article-document -->", documentHtml);
-  const derivedMarkup = articleDerivedMarkup(article);
+  const derivedMarkup = articleDerivedMarkup(pageArticle);
   html = html.replace("<!-- ssr:article-abstract -->", derivedMarkup);
   if (derivedMarkup) {
     html = html.replace('class="article-end"', 'class="article-end has-derived"');
@@ -414,7 +417,7 @@ export function renderArticlePage(template, { content, article, baseUrl, nonce, 
   if (article.format === "markdown") html = html.replace('class="article-document"', 'class="article-document article-markdown"');
   return html.replace(
     "<!-- ssr:page-data -->",
-    `<script id="page-data" type="application/json" nonce="${escapeHtml(nonce)}">${jsonForHtml({ content, article })}</script>`,
+    `<script id="page-data" type="application/json" nonce="${escapeHtml(nonce)}">${jsonForHtml({ content, article: pageArticle })}</script>`,
   );
 }
 
