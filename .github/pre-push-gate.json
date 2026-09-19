@@ -19,6 +19,8 @@
       "evidence": [
         "docs/UPDATER.md",
         "services/api/src/updater.js",
+        "services/api/src/update-flow.js",
+        "services/api/tests/update-flow.test.js",
         "services/api/tests/laboratory.test.js"
       ]
     },

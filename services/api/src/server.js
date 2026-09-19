@@ -1,3 +1,4 @@
+import { mountUpdateFlow } from "./update-flow.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -171,11 +172,15 @@ export async function createLaboratoryApp(overrides = {}) {
     for (const remoteOrigin of new Set(preconnectOrigins)) values.push(`<${remoteOrigin}>; rel="preconnect"`);
     res.setHeader("Link", values.join(", "));
   };
-  const restoreFromBuffer = async (buffer) => {
+  const restoreFromBuffer = async (buffer, keepRestorePoint = true) => {
     const parsed = await parseBackupAsync(buffer);
-    const restorePoint = await createBackup(store, config.version);
-    await store.saveRestorePoint(restorePoint);
-    return store.restoreSnapshot(parsed.snapshot, parsed.files);
+    if (keepRestorePoint) {
+      const restorePoint = await createBackup(store, config.version);
+      await store.saveRestorePoint(restorePoint);
+    }
+    const restored = await store.restoreSnapshot(parsed.snapshot, parsed.files);
+    await derivedContent.loadSettings();
+    return restored;
   };
 
   const app = express();
@@ -757,15 +762,13 @@ export async function createLaboratoryApp(overrides = {}) {
     catch (error) { next(error); }
   });
 
-  app.post("/api/updates/apply", auth.requireMutation, archiveOperation(async (req, res, next) => {
-    try {
-      const version = String(req.body?.version ?? "");
-      if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error("Invalid release version");
-      const backup = await createBackup(store, config.version);
-      const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
-      res.status(202).json(await updater.createUpdate(version, `laboratory-backup-${stamp}.zip`, backup));
-    } catch (error) { next(error); }
-  }));
+  mountUpdateFlow(app, { prefix: "/api/update-flow", service: "laboratory", authorize: auth.requireAdmin, mutation: [auth.requireMutation],
+    headId: config.updaterHeadId, token: () => config.updaterControlToken,
+    client: { status: () => updater.status(), request: (method, route, body) => updater.request(method, route, body, true, 90_000) },
+    backupGuard: archiveOperation,
+    buildBackup: async () => ({ archive: await createBackup(store, config.version), filename: `laboratory-${new Date().toISOString().replaceAll(":", "-")}.zip` }),
+  });
+  app.post("/api/updates/apply", auth.requireMutation, (_req, res) => res.status(426).json({error: "Use the Updates dialog to save and return the same pre-update ZIP"}));
 
   app.get("/api/updates/jobs/:id", auth.requireAdmin, async (req, res, next) => {
     try { res.json(await updater.job(req.params.id)); }
@@ -783,7 +786,7 @@ export async function createLaboratoryApp(overrides = {}) {
     }
     return archiveOperation(async (req, res) => {
       try {
-        res.json({ restored: await restoreFromBuffer(req.file?.buffer) });
+        res.json({ restored: await restoreFromBuffer(req.file?.buffer, false) });
       } catch (restoreError) { next(restoreError); }
     }, backupUpload.single("file"))(req, res, next);
   });

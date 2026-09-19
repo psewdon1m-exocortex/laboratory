@@ -11,6 +11,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <script src="/scripts/theme-init.js"></script>
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/scripts/update-overlay.css" />
   </head>
   <body class="admin-page">
     <header class="admin-topbar">
@@ -105,8 +106,7 @@
             <form class="neptune-initialize-form" data-neptune-initialize><label>Saturn setup code<input name="enrollment_code" required minlength="32" maxlength="32" autocomplete="off" /></label><button type="submit">Initialize Neptune</button></form>
           </div>
           <div class="system-actions">
-            <button type="button" class="button-quiet" data-neptune-check>Check Neptune update</button>
-            <button type="button" data-neptune-install hidden>Install Neptune</button>
+            <button type="button" class="button-quiet" data-neptune-check>Check Neptune for updates</button>
           </div>
           <p class="admin-note" data-neptune-result></p>
         </section>
@@ -151,8 +151,8 @@
             <dt>Updater</dt><dd data-updater-status></dd>
           </dl>
           <div class="system-actions">
-            <button type="button" data-update-check>Check for update</button>
-            <button type="button" data-updater-self>Update Updater</button>
+            <button type="button" data-update-check>Check for updates</button>
+            <button type="button" data-updater-self>Check Updater for updates</button>
           </div>
           <p class="admin-note" data-updater-result></p>
         </section>
@@ -216,13 +216,7 @@
       </form>
     </dialog>
 
-    <dialog class="site-dialog update-dialog" data-update-dialog aria-labelledby="update-dialog-title">
-      <div class="site-dialog-kicker">Laboratory / update</div>
-      <h2 id="update-dialog-title">Laboratory update</h2>
-      <p>Installed version: <strong data-update-dialog-version></strong></p>
-      <div class="update-dialog-result" data-update-result></div>
-      <div class="site-dialog-actions"><button class="button-quiet" type="button" data-update-close>Close</button></div>
-    </dialog>
+
     <dialog class="site-dialog" data-confirm-dialog aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message">
       <div class="site-dialog-kicker">Laboratory / private</div>
       <h2 id="confirm-dialog-title" data-confirm-title>Confirm action</h2>

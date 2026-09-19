@@ -1,3 +1,4 @@
+import { openUpdateOverlay } from "./update-overlay.js";
 import { api, bindThemeControls, formatPublicationDate } from "./shared.js";
 
 const loginCard = document.querySelector("[data-login-card]");
@@ -12,7 +13,6 @@ const neptuneRuntime = document.querySelector("[data-neptune-runtime]");
 const neptuneEnabled = document.querySelector("[data-neptune-enabled]");
 const neptuneInterval = document.querySelector("[data-neptune-interval]");
 const neptuneResult = document.querySelector("[data-neptune-result]");
-const neptuneInstall = document.querySelector("[data-neptune-install]");
 const toast = document.querySelector("[data-toast]");
 const importForm = document.querySelector("[data-article-import-form]");
 const editor = document.querySelector("[data-article-editor]");
@@ -25,7 +25,6 @@ const editorAi = document.querySelector("[data-editor-ai]");
 const editorAiStatus = document.querySelector("[data-editor-ai-status]");
 const accessKeyDialog = document.querySelector("[data-access-key-dialog]");
 const kernelTokenDialog = document.querySelector("[data-kernel-token-dialog]");
-const updateDialog = document.querySelector("[data-update-dialog]");
 const aiSettingsForm = document.querySelector("[data-ai-settings-form]");
 const confirmDialog = document.querySelector("[data-confirm-dialog]");
 const confirmTitle = document.querySelector("[data-confirm-title]");
@@ -37,7 +36,6 @@ let currentState = null;
 let selectedArticleId = "";
 let confirmResolver = null;
 let neptuneStatus = null;
-let neptuneRelease = null;
 const customSelectSync = new WeakMap();
 
 function prepareTimeZoneSelect() {
@@ -385,7 +383,6 @@ function renderRuntime(runtime) {
   runtimeItem("Last article sync", runtime.contentLibrary?.lastSyncAt || runtime.contentLibrary?.lastError);
   runtimeItem("Public URL", runtime.publicUrl);
   document.querySelector("[data-update-version]").textContent = runtime.version || "Unknown";
-  document.querySelector("[data-update-dialog-version]").textContent = runtime.version || "Unknown";
   document.querySelector("[data-updater-status]").textContent = runtime.updater?.available
     ? `${runtime.updater.status} / ${runtime.updater.version}`
     : "Not connected";
@@ -660,68 +657,12 @@ document.querySelector("[data-restore-input]").addEventListener("change", async 
   event.currentTarget.value = "";
 });
 
-document.querySelector("[data-update-check]").addEventListener("click", async () => {
-  const output = document.querySelector("[data-update-result]");
-  if (!updateDialog.open) updateDialog.showModal();
-  output.textContent = "Checking releases";
-  try {
-    const result = await mutation("/api/updates/check", { method: "POST" });
-    output.replaceChildren();
-    if (!result.update_available) {
-      output.textContent = `Laboratory ${result.installed_version} is current.`;
-      return;
-    }
-    output.append(`Laboratory ${result.available_version} is available. `);
-    const install = document.createElement("button");
-    install.type = "button";
-    install.className = "button-inline";
-    install.textContent = "Install update";
-    install.addEventListener("click", async () => {
-      const accepted = await confirmAction({
-        title: "Install update?",
-        message: `Laboratory will create a backup and install version ${result.available_version}.`,
-        confirmLabel: "Install update",
-      });
-      if (!accepted) return;
-      try {
-        const job = await mutation("/api/updates/apply", { method: "POST", body: JSON.stringify({ version: result.available_version }) });
-        await waitJob(job, output);
-      } catch (error) {
-        if (!isRestartWindowError(error)) {
-          output.textContent = error.message;
-          return;
-        }
-        try {
-          await waitForLaboratoryRestart(output);
-          window.location.reload();
-        } catch (restartError) { output.textContent = restartError.message; }
-      }
-    });
-    output.appendChild(install);
-  } catch (error) { output.textContent = error.message; }
-});
-
-document.querySelector("[data-neptune-check]").addEventListener("click", async () => {
-  try {
-    neptuneRelease = await mutation("/api/neptune/update/check", { method: "POST" });
-    neptuneResult.textContent = neptuneRelease.update_available
-      ? `Neptune ${neptuneRelease.available_version} is available.`
-      : `Neptune ${neptuneStatus.version} is current.`;
-    neptuneInstall.hidden = !neptuneRelease.update_available;
-    neptuneInstall.textContent = neptuneRelease.update_available ? `Install Neptune ${neptuneRelease.available_version}` : "Install Neptune";
-  } catch (error) { neptuneResult.textContent = error.message; }
-});
-
-neptuneInstall.addEventListener("click", async () => {
-  if (!neptuneRelease?.available_version) return;
-  try {
-    await mutation("/api/neptune/update/install", { method: "POST", body: JSON.stringify({ version: neptuneRelease.available_version }) });
-    neptuneInstall.hidden = true;
-    neptuneRelease = null;
-    await loadNeptune();
-    showToast("Neptune updated");
-  } catch (error) { neptuneResult.textContent = error.message; }
-});
+function openUpdates(component = "laboratory") {
+  return openUpdateOverlay({ service: "laboratory", component, base: "/api/update-flow", theme: "laboratory",
+    headers: () => ({ "X-CSRF-Token": csrfToken }), onComplete: () => Promise.all([loadState(), loadNeptune()]) });
+}
+document.querySelector("[data-update-check]").addEventListener("click", () => openUpdates());
+document.querySelector("[data-neptune-check]").addEventListener("click", () => openUpdates("neptune"));
 
 async function initialize() {
   bindThemeControls();
@@ -752,22 +693,6 @@ function isRestartWindowError(error) {
 
 function waitForPoll() {
   return new Promise((resolve) => setTimeout(resolve, jobPollDelay));
-}
-
-async function waitForLaboratoryRestart(output) {
-  let consecutiveHealthyResponses = 0;
-  for (let attempt = 0; attempt < 90; attempt++) {
-    output.textContent = "Laboratory is restarting. Waiting for it to return...";
-    try {
-      const response = await fetch("/api/live", { cache: "no-store", credentials: "same-origin" });
-      consecutiveHealthyResponses = response.ok ? consecutiveHealthyResponses + 1 : 0;
-      if (consecutiveHealthyResponses >= 2) return;
-    } catch {
-      consecutiveHealthyResponses = 0;
-    }
-    await waitForPoll();
-  }
-  throw new Error("Laboratory did not return after the update. Check the Updater job and service logs.");
 }
 
 async function waitJob(started, output) {
@@ -826,11 +751,4 @@ document.querySelector("[data-kernel-token-form]").addEventListener("submit", as
   } catch (error) { showToast(error.message); }
   finally { button.disabled = false; }
 });
-document.querySelector("[data-update-close]").addEventListener("click", () => updateDialog.close());
-updateDialog.addEventListener("click", (event) => { if (event.target === updateDialog) updateDialog.close(); });
-document.querySelector("[data-updater-self]").addEventListener("click", async (event) => {
-  const button = event.currentTarget; button.disabled = true;
-  const output = document.querySelector("[data-updater-result]");
-  try { await waitJob(await mutation("/api/updates/agent/install", {method:"POST"}), output); await loadState(); }
-  catch (error) { showToast(error.message); } finally { button.disabled = false; }
-});
+document.querySelector("[data-updater-self]").addEventListener("click", () => openUpdates("updater"));

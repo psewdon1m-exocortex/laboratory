@@ -498,9 +498,10 @@ export class LaboratoryStore {
     }
     const names = new Set();
     for (const item of snapshot.settings) {
-      if (!Object.hasOwn(DEFAULT_SETTINGS, item?.key) || names.has(item.key) || typeof item.value !== "string") throw new Error("Invalid or duplicate backup setting");
+      if (!(Object.hasOwn(DEFAULT_SETTINGS, item?.key) || ["aiPipelineEnabled", "aiSystemPrompt"].includes(item?.key)) || names.has(item.key) || typeof item.value !== "string") throw new Error("Invalid or duplicate backup setting");
       names.add(item.key);
-      if (item.key === "noiseEnabled" && !["true", "false"].includes(item.value)) throw new Error("Invalid backup boolean setting");
+      if (["noiseEnabled", "aiPipelineEnabled"].includes(item.key) && !["true", "false"].includes(item.value)) throw new Error("Invalid backup boolean setting");
+      if (item.key === "aiSystemPrompt" && (item.value.trim().length < 40 || item.value.length > 40_000 || item.value.includes("\0"))) throw new Error("Invalid backup AI system prompt");
     }
     validateSettings(normalizeSettings(snapshot.settings));
     const operation = crypto.randomBytes(8).toString("hex");

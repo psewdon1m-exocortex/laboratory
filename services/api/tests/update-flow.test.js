@@ -1,0 +1,57 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { createLaboratoryApp } from "../src/server.js";
+import { parseBackup } from "../src/backup.js";
+
+test("Laboratory update uses one standard ZIP, enforces session/CSRF/save receipt, and keeps helper updates backup-free", async context => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "laboratory-update-v2-"));
+  const app = await createLaboratoryApp({ dataDir, accessKey: "synthetic-update-access-key", sessionSecret: "synthetic-session-secret-which-is-long-enough", updaterControlToken: "synthetic-update-control-token", cookieSecure: false, kernelUrl: "", kernelServiceToken: "", derivedContentEnabled: false });
+  const runtime = app.locals.laboratory, submitted = [];
+  const originalPrompt = "Synthetic operator instruction preserved by the standard update ZIP. ".repeat(2);
+  runtime.derivedContent.configure({ enabled: false, prompt: originalPrompt });
+  runtime.updater.status = async () => ({ update_protocol: 2, available: true });
+  runtime.updater.request = async (method, route, body, authenticated) => {
+    assert.equal(authenticated, true);
+    if (route === "/v2/check") return { available_version: "0.1.8", update_available: true };
+    submitted.push({ route, body }); return { id: "fixture-job", state: "REQUESTED" };
+  };
+  const server = await new Promise(resolve => { const value = app.listen(0, "127.0.0.1", () => resolve(value)); });
+  context.after(async () => {
+    await new Promise(resolve => server.close(resolve));
+    runtime.register.stop(); runtime.githubLibrary.stop(); runtime.derivedContent.stop(); runtime.searchNotifications.stop(); await runtime.audit.queue; runtime.store.close();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  assert.equal((await fetch(`${base}/api/update-flow/check`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ component: "laboratory" }) })).status, 401);
+  const login = await fetch(`${base}/api/admin/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ access_key: "synthetic-update-access-key" }) });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.getSetCookie().map(value => value.split(";")[0]).join("; ");
+  const { csrfToken } = await login.json();
+  assert.equal((await fetch(`${base}/api/update-flow/backup`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ version: "0.1.8" }) })).status, 403);
+  const headers = { cookie, "content-type": "application/json", "X-CSRF-Token": csrfToken };
+  const downloaded = await fetch(`${base}/api/update-flow/backup`, { method: "POST", headers, body: JSON.stringify({ version: "0.1.8" }) });
+  assert.equal(downloaded.status, 200);
+  const archive = Buffer.from(await downloaded.arrayBuffer());
+  assert.equal(parseBackup(archive).snapshot.schema, "exocortex.laboratory.backup.v3");
+  const raw = { ...headers, "content-type": "application/octet-stream", "X-Update-Receipt": downloaded.headers.get("x-update-receipt") };
+  assert.equal((await fetch(`${base}/api/update-flow/install/laboratory`, { method: "POST", headers: raw, body: archive })).status, 400);
+  raw["X-Update-Saved"] = "1";
+  assert.equal((await fetch(`${base}/api/update-flow/install/laboratory`, { method: "POST", headers: raw, body: Buffer.from("changed") })).status, 400);
+  assert.equal((await fetch(`${base}/api/update-flow/install/laboratory`, { method: "POST", headers: raw, body: archive })).status, 202);
+  assert.equal(submitted.length, 1);
+  assert.deepEqual(Buffer.from(submitted[0].body.backup.data_base64, "base64"), archive);
+  assert.equal((await fetch(`${base}/api/update-flow/install/updater`, { method: "POST", headers, body: JSON.stringify({ version: "0.4.10", request_id: "01234567-0123-4123-8123-012345678901" }) })).status, 202);
+  assert.equal(submitted[1].route, "/v2/components/updater/updates");
+  assert.equal(submitted[1].body.backup, undefined);
+  assert.equal((await fetch(`${base}/api/updates/apply`, { method: "POST", headers, body: JSON.stringify({ version: "0.1.8" }) })).status, 426);
+  runtime.store.saveRestorePoint = async () => { throw new Error("Updater rollback must not retain another archive"); };
+  runtime.derivedContent.configure({ enabled: false, prompt: "A different valid instruction written after the backup was taken." });
+  const form = new FormData(); form.append("file", new Blob([archive], { type: "application/zip" }), "backup.zip");
+  const restored = await fetch(`${base}/api/internal/updater/restore`, { method: "POST", headers: { "X-Updater-Token": "synthetic-update-control-token" }, body: form });
+  assert.equal(restored.status, 200, await restored.text());
+  assert.equal(runtime.derivedContent.settings().prompt, originalPrompt.trim());
+  assert.equal(runtime.derivedContent.settings().enabled, false);
+});

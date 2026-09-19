@@ -130,7 +130,7 @@ export async function checkGithubRelease(repositoryUrl, currentVersion, timeoutM
     .filter((release) => !release.draft && !release.prerelease && release.tag_name?.startsWith(`${service}-v`))
     .map((release) => ({ version: release.tag_name.slice(`${service}-v`.length), release }))
     .map((item) => ({ ...item, tuple: versionTuple(item.version) }))
-    .filter((item) => item.tuple)
+    .filter((item) => item.tuple && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(item.version))
     .sort((a, b) => compareVersions(b.tuple, a.tuple));
   const current = versionTuple(currentVersion) ?? [0, 0, 0, ""];
   const available = candidates.find((item) => compareVersions(item.tuple, current) > 0);

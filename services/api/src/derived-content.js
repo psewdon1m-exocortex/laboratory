@@ -237,6 +237,14 @@ export class DerivedContentRuntime {
   }
 
   async start() {
+    await this.loadSettings();
+    this.enqueueMissing();
+    setImmediate(() => this.tick());
+    this.timer = setInterval(() => this.tick(), this.config.derivedContentIntervalSeconds * 1000);
+    this.timer.unref();
+  }
+
+  async loadSettings() {
     const defaultInstruction = await fs.readFile(SYSTEM_INSTRUCTION_PATH, "utf8");
     const setting = this.db.prepare("SELECT value FROM settings WHERE key = ?");
     const insert = this.db.prepare("INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)");
@@ -244,10 +252,6 @@ export class DerivedContentRuntime {
     insert.run("aiSystemPrompt", defaultInstruction);
     this.config.derivedContentEnabled = setting.get("aiPipelineEnabled")?.value === "true";
     this.systemInstruction = setting.get("aiSystemPrompt")?.value || defaultInstruction;
-    this.enqueueMissing();
-    setImmediate(() => this.tick());
-    this.timer = setInterval(() => this.tick(), this.config.derivedContentIntervalSeconds * 1000);
-    this.timer.unref();
   }
 
   stop() {

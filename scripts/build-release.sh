@@ -52,6 +52,7 @@ cat > "$output/laboratory-release.json" <<EOF
 {
   "schema_version": 1,
   "service": "laboratory",
+  "rollback_restore": "laboratory-offline-v1",
   "component_role": "publication-head",
   "version": "$version",
   "image": {
