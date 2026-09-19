@@ -80,9 +80,7 @@ export function loadConfig(overrides = {}) {
     publicUrl: (process.env.LABORATORY_PUBLIC_URL ?? "").trim(),
     defaultLanguage: (process.env.LABORATORY_DEFAULT_LANGUAGE ?? "en").trim(),
     defaultAuthorName: (process.env.LABORATORY_DEFAULT_AUTHOR_NAME ?? "c31e1b26").trim(),
-    geminiModel: (process.env.LABORATORY_GEMINI_MODEL ?? "gemini-2.5-flash").trim(),
-    geminiMaxOutputTokens: integer("LABORATORY_GEMINI_MAX_OUTPUT_TOKENS", 8_192, 1_024),
-    geminiThinkingBudget: integer("LABORATORY_GEMINI_THINKING_BUDGET", 0, 0),
+    wyvernLinkFile: process.env.LABORATORY_WYVERN_LINK_FILE || "/run/wyvern-link/link.json",
     derivedContentEnabled: binarySwitch("LABORATORY_AI_PIPELINE_ENABLED", true),
     derivedContentIntervalSeconds: integer("LABORATORY_DERIVED_CONTENT_INTERVAL_SEC", 15, 5),
     derivedContentMaxAttempts: integer("LABORATORY_DERIVED_CONTENT_MAX_ATTEMPTS", 3, 1),
@@ -137,9 +135,6 @@ function validateConfig(config) {
   }
   if (config.defaultAuthorName.length > 120) {
     issues.push("LABORATORY_DEFAULT_AUTHOR_NAME must contain at most 120 characters");
-  }
-  if (!/^[A-Za-z0-9._/-]{3,120}$/.test(config.geminiModel)) {
-    issues.push("LABORATORY_GEMINI_MODEL is invalid");
   }
   if (config.indexNowEnabled && !/^[A-Za-z0-9-]{8,128}$/.test(config.indexNowKey)) {
     issues.push("LABORATORY_INDEXNOW_KEY must contain 8-128 alphanumeric or hyphen characters");

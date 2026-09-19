@@ -26,9 +26,7 @@ services:
       LABORATORY_DEFAULT_LANGUAGE: "${LABORATORY_DEFAULT_LANGUAGE:-en}"
       LABORATORY_DEFAULT_AUTHOR_NAME: "${LABORATORY_DEFAULT_AUTHOR_NAME:-c31e1b26}"
       LABORATORY_AI_PIPELINE_ENABLED: "${LABORATORY_AI_PIPELINE_ENABLED:-1}"
-      LABORATORY_GEMINI_MODEL: "${LABORATORY_GEMINI_MODEL:-gemini-2.5-flash}"
-      LABORATORY_GEMINI_MAX_OUTPUT_TOKENS: "${LABORATORY_GEMINI_MAX_OUTPUT_TOKENS:-8192}"
-      LABORATORY_GEMINI_THINKING_BUDGET: "${LABORATORY_GEMINI_THINKING_BUDGET:-0}"
+      LABORATORY_WYVERN_LINK_FILE: /run/wyvern-link/link.json
       LABORATORY_DERIVED_CONTENT_INTERVAL_SEC: "${LABORATORY_DERIVED_CONTENT_INTERVAL_SEC:-15}"
       LABORATORY_DERIVED_CONTENT_MAX_ATTEMPTS: "${LABORATORY_DERIVED_CONTENT_MAX_ATTEMPTS:-3}"
       LABORATORY_INDEXNOW_ENABLED: "${LABORATORY_INDEXNOW_ENABLED:-false}"
@@ -59,6 +57,8 @@ services:
       NEPTUNE_EXPORT_TOKEN_FILE: /run/secrets/neptune-export-token
     volumes:
       - laboratory-data:/app/data
+      - /run/wyvern:/run/wyvern:ro
+      - /etc/exocortex/wyvern/clients/laboratory:/run/wyvern-link:ro
       - type: bind
         source: "${UPDATER_SOCKET_DIR:-/run/exocortex}"
         target: /run/exocortex
@@ -75,6 +75,7 @@ services:
         target: /run/secrets/neptune-export-token
         read_only: true
     group_add:
+      - "10001"
       - "${UPDATER_SOCKET_GID:?Set UPDATER_SOCKET_GID during VPS installation}"
       - "${NEPTUNE_SOCKET_GID:?Set NEPTUNE_SOCKET_GID during Neptune installation}"
     init: true

@@ -174,8 +174,8 @@ test("Kernel Register resolves Laboratory repository and public URL", () => {
   assert.equal(resolved.contentRepositoryUrl, "https://github.com/psewdon1m-exocortex/laboratory-library");
   assert.equal(resolved.contentRepositoryBranch, "main");
   assert.equal(resolved.publicUrl, "https://laboratory.example.com");
-  assert.equal(resolved.geminiApiKey, "resolved-gemini-key");
-  assert.equal(resolved.geminiSecretRef, "");
+  assert.equal(resolved.geminiApiKey, undefined);
+  assert.equal(resolved.geminiSecretRef, undefined);
   assert.equal(resolved.refreshSeconds, 75);
   const localOnly = applyLaboratoryRegister({
     repositoryUrl: "",
@@ -204,16 +204,11 @@ test("AI pipeline is controlled by a strict 0/1 environment switch", () => {
   }
 });
 
-test("AI pipeline accepts an in-memory value resolved through Kernel", () => {
-  const library = { db: {} };
-  const register = { state: { geminiApiKey: "volt-test-gemini-key-654321" }, error: "" };
-  const runtime = new DerivedContentRuntime({ environment: "production" }, library, register);
-  assert.deepEqual(runtime.credential(), {
-    key: "volt-test-gemini-key-654321",
-    source: "volt",
-    error: "",
-  });
-  assert.equal(runtime.apiKey(), "volt-test-gemini-key-654321");
+test("AI pipeline has no provider credential dependency", () => {
+  const runtime = new DerivedContentRuntime({ derivedContentEnabled: true }, { db: {} }, { get state() { throw Error("Provider key must not be resolved"); } });
+  assert.equal(runtime.ensureAi(), runtime.gateway);
+  assert.equal(typeof runtime.apiKey, "undefined");
+  assert.equal(runtime.safeError(new Error("private provider payload")), "Article derivative processing failed; inspect source and Adapter configuration");
 });
 
 test("Kernel broker resolves an exact Register key without caching it", async () => {
@@ -720,27 +715,19 @@ test("derived generations use immutable versioned URLs and requeue stale prompt 
   store.library.db.prepare("DELETE FROM article_generation_jobs WHERE revision_id <> ?").run(importedRevisionId);
   const job = runtime.nextJob();
   assert.ok(job);
-  runtime.ensureAi = () => ({
-    models: {
-      generateContent: async () => ({
-        text: JSON.stringify({
-          description: "too short",
-          abstractMarkdown: "# Abstract\n\nA valid abstract body that is long enough for local validation.",
-          transcriptMarkdown: null,
-          evidence: [],
-          warnings: [],
-        }),
-        usageMetadata: { promptTokenCount: 120, candidatesTokenCount: 15, totalTokenCount: 135 },
-      }),
-    },
+  runtime.gateway.call = async () => ({
+    finish_reason: "stop", target: { driver: "google", model: "gemini-test-model", adapter_id: "fixture", profile: "default" },
+    json: { description: "too short", abstractMarkdown: "# Abstract\n\nA valid abstract body that is long enough for local validation.", transcriptMarkdown: null, evidence: [], warnings: [] },
+    usage: { input_tokens:120, output_tokens:15, total_tokens:135 },
   });
   const repairedDescription = await runtime.generate(job);
   assert.match(repairedDescription.description, /A valid abstract body/);
   assert.ok(repairedDescription.warnings.some((warning) => /description had an invalid length/i.test(warning)));
   assert.deepEqual(JSON.parse(store.library.db.prepare("SELECT usage_json AS usage FROM article_generation_jobs WHERE revision_id = ?").get(job.revision_id).usage), {
-    promptTokenCount: 120,
-    candidatesTokenCount: 15,
-    totalTokenCount: 135,
+    input_tokens: 120,
+    output_tokens: 15,
+    total_tokens: 135,
+    finishReason: "stop",
   });
   await runtime.persist(job, {
     description: "A compact description of the verified source publication.",
@@ -882,32 +869,21 @@ test("Russian Markdown keeps its full AI abstract when evidence is malformed or 
   validEvidence.splice(1, 0, { text: "слишком коротко", sourceLocator: "section:section-2", confidence: 0.5 });
   const fullAbstract = "# Абстракт\n\nДокумент систематизирует приоритеты развития SEO и GEO для Laboratory, отделяет критические требования публикации от последующих улучшений и сохраняет связь каждого решения с исходными условиями проекта.";
   let request;
-  runtime.ensureAi = () => ({
-    models: {
-      generateContent: async (value) => {
-        request = value;
-        return {
-          text: JSON.stringify({
-            description: "Систематизированный backlog приоритетов SEO и GEO для Laboratory.",
-            abstractMarkdown: fullAbstract,
-            transcriptMarkdown: null,
-            evidence: validEvidence,
-            warnings: [],
-          }),
-          usageMetadata: { promptTokenCount: 9000, candidatesTokenCount: 900, totalTokenCount: 9900 },
-          candidates: [{ finishReason: "STOP" }],
-        };
-      },
-    },
-  });
+  runtime.gateway.call = async (_method, _route, value) => {
+    request = value.data;
+    return { finish_reason: "stop", target: { driver: "google", model: "gemini-test-model", adapter_id: "fixture", profile: "default" },
+      json: { description: "Систематизированный backlog приоритетов SEO и GEO для Laboratory.", abstractMarkdown: fullAbstract, transcriptMarkdown: null, evidence: validEvidence, warnings: [] },
+      usage: { input_tokens:9000, output_tokens:900, total_tokens:9900 },
+    };
+  };
   const generated = await runtime.generate(job);
   assert.equal(generated.abstractMarkdown, fullAbstract);
   assert.equal(generated.evidence.length, 11);
   assert.ok(generated.warnings.some((warning) => /malformed evidence/i.test(warning)));
   assert.ok(generated.warnings.some((warning) => /above the 12-item limit/i.test(warning)));
-  assert.match(request.contents[1].text, /SOURCE SECTION LOCATOR MAP/);
-  assert.match(request.contents[1].text, /"id":"section-128"/);
-  assert.equal(JSON.parse(store.library.db.prepare("SELECT usage_json AS usage FROM article_generation_jobs WHERE revision_id = ?").get(job.revision_id).usage).finishReason, "STOP");
+  assert.match(request.messages[1].content[1].text, /SOURCE SECTION LOCATOR MAP/);
+  assert.match(request.messages[1].content[1].text, /"id":"section-128"/);
+  assert.equal(JSON.parse(store.library.db.prepare("SELECT usage_json AS usage FROM article_generation_jobs WHERE revision_id = ?").get(job.revision_id).usage).finishReason, "stop");
 
   await runtime.persist(job, generated);
   const article = store.getArticle(imported.article.internalId);

@@ -6,7 +6,6 @@ import profile from "./deployment-profile.json" with { type: "json" };
 const SCHEMA = "exocortex.register.snapshot.v1";
 const REVISION_PATTERN = /^register-[A-Za-z0-9-]+$/;
 const VOLT_REFERENCE = /^volt:\/\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[1-5]$/i;
-const GEMINI_KEY = "services.laboratory.ai.gemini_api_key";
 export const SECONDARY_SECRET_KEYS = {
   githubToken: "services.laboratory.credentials.github_token",
   githubWebhookSecret: "services.laboratory.credentials.github_webhook_secret",
@@ -24,7 +23,6 @@ const LABORATORY_KEYS = [
   "services.saturn.sni",
   "services.saturn.port",
   "intervals.kernel.refresh_sec",
-  GEMINI_KEY,
   ...Object.values(SECONDARY_SECRET_KEYS),
   ...Object.keys(profile.keys),
 ];
@@ -90,8 +88,6 @@ export function applyLaboratoryRegister(config, snapshot) {
     contentRepositoryBranch: "",
     publicUrl: config.publicUrl,
     saturnUrl: config.saturnUrl,
-    geminiApiKey: "",
-    geminiSecretRef: "",
     githubToken: "", githubWebhookSecret: "", saturnClientToken: "", googleServiceAccountBase64: "",
     refreshSeconds: config.kernelRefreshSeconds,
     revision: "",
@@ -133,9 +129,8 @@ export function applyLaboratoryRegister(config, snapshot) {
   const refreshSeconds = Number.isInteger(sharedRefresh) && sharedRefresh >= 5 && sharedRefresh <= 3600
     ? sharedRefresh
     : config.kernelRefreshSeconds;
-  const geminiApiKey = String(resolve(values, GEMINI_KEY) ?? "").trim();
   const credentials = Object.fromEntries(Object.entries(SECONDARY_SECRET_KEYS).map(([name, key]) => [name, String(resolve(values, key) ?? "")]));
-  return { repositoryUrl, neptuneRepositoryUrl, contentRepositoryUrl, contentRepositoryBranch, publicUrl, saturnUrl, geminiApiKey, geminiSecretRef: "", ...credentials, refreshSeconds, revision: snapshot.revision };
+  return { repositoryUrl, neptuneRepositoryUrl, contentRepositoryUrl, contentRepositoryBranch, publicUrl, saturnUrl, ...credentials, refreshSeconds, revision: snapshot.revision };
 }
 
 function withResolvedValues(snapshot, resolved) {
@@ -251,7 +246,7 @@ export class KernelRegisterRuntime {
       this.error = "";
     } catch (error) {
       this.error = error.message;
-      this.state = { ...this.state, geminiApiKey: "", githubToken: "", githubWebhookSecret: "", saturnClientToken: "", googleServiceAccountBase64: "" };
+      this.state = { ...this.state, githubToken: "", githubWebhookSecret: "", saturnClientToken: "", googleServiceAccountBase64: "" };
     }
     return this.state;
   }

@@ -289,23 +289,22 @@ revision. The source ZIP is never mutated. Configure:
 
 ```text
 LABORATORY_AI_PIPELINE_ENABLED=1
-LABORATORY_GEMINI_MODEL=gemini-2.5-flash
-LABORATORY_GEMINI_MAX_OUTPUT_TOKENS=8192
-LABORATORY_GEMINI_THINKING_BUDGET=0
 ```
 
-The default thinking budget is zero because this pipeline performs faithful
-transcription and bounded extraction rather than open-ended reasoning. This
-reserves the output-token allowance for the article artifacts themselves.
+Configure the model, capability set and output-token limit in a shared Wyvern
+Adapter through `sudo updater tui`. Grant the Laboratory client access, then
+connect and select its `derivatives` binding in the separate Wyvern Settings
+card. The profile needs text, structured_output and pdf capabilities.
 Set `LABORATORY_AI_PIPELINE_ENABLED=0` to pause all model work while keeping
 published derivatives available. Set it to `1` to enable the worker.
 
-The Gemini API key is represented by
-`services.laboratory.ai.gemini_api_key` in Kernel Register as a
-`volt://<entry-id>/<field-id>` reference. Laboratory asks Kernel to
-resolve the Register key and keeps the returned value only in process memory.
-Laboratory has no Volt URL or token; Register caches and Laboratory backups
-never contain the resolved value.
+Wyvern owns the outgoing Gemini request and resolves its Adapter key through
+scoped Kernel grants from Volt. Laboratory only has its own protected Wyvern
+client link; no provider key is returned to it. Local transport is a Unix socket;
+remote HTTPS is an explicit operator choice without automatic fallback.
+LLM readiness is independent of the main application readiness. Prompts,
+source evidence checks, job retries and publication remain in Laboratory.
+The former Gemini key binding and LABORATORY_GEMINI_* variables are unused.
 
 The system instruction is versioned at
 `services/api/src/prompts/article-derivatives.system.txt`. Failed jobs do not
@@ -388,7 +387,6 @@ URL or branch, and a fresh process requires available Kernel and Volt:
 - `services.laboratory.url`, or `services.laboratory.sni` plus `.port`
 - `services.saturn.sni`
 - `services.saturn.port`
-- `services.laboratory.ai.gemini_api_key`
 - `intervals.kernel.refresh_sec`
 
 The content repository webhook endpoint is `/api/github/webhook`. Configure a

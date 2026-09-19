@@ -431,13 +431,43 @@ async function loadState() {
 }
 
 async function loadAiSettings() {
+  await loadWyvernSettings();
   const settings = await api("/api/admin/ai");
   aiSettingsForm.enabled.checked = Boolean(settings.enabled);
   aiSettingsForm.prompt.value = settings.prompt || "";
   document.querySelector("[data-ai-credential]").textContent = settings.configured
-    ? "API key: connected through Kernel Register / Volt"
-    : "API key: unavailable in Kernel Register";
+    ? "Wyvern Adapter is ready"
+    : "Select a ready Adapter in the Wyvern card";
   document.querySelector("[data-ai-model]").textContent = `Provider: ${settings.provider} · Model: ${settings.model}`;
+}
+
+async function loadWyvernSettings() {
+  const box = document.querySelector('[data-wyvern-settings]');
+  const status = await api('/api/admin/wyvern');
+  box.replaceChildren();
+  const info = document.createElement('p'); info.textContent = status.llm_ready ? 'Connected · '+status.mode+' · ready' : status.reachable ? 'Connected · select an Adapter' : 'Wyvern is unavailable or not connected'; box.append(info);
+  const details = document.createElement('dl');
+  const observed = value => value === true ? 'Yes' : value === false ? 'No' : 'Unknown';
+  for (const [label, value] of [['Instance',status.instance_id||'Unknown'],['Client',status.client_id||'Unknown'],['Transport',status.mode||'Unknown'],['Link configured',observed(status.link_configured)],['Gateway reachable',observed(status.reachable)],['Client authenticated',observed(status.client_linked)],['Gateway ready',observed(status.ready)],['Adapter selected',observed(status.adapter_selected)]]) {
+    const term=document.createElement('dt'), description=document.createElement('dd');term.textContent=label;description.textContent=value;details.append(term,description);
+  }
+  box.append(details);
+  const select = document.createElement('select'); select.setAttribute('aria-label','Adapter for article derivatives'); select.add(new Option('Not selected',''));
+  const fn = status.functions?.derivatives;
+  for (const a of status.adapters || []) for (const [profile,p] of Object.entries(a.profiles)) {
+    if (a.enabled && (fn?.required_capabilities || ['text','structured_output','pdf']).every(c=>p.capabilities.includes(c))) {
+      const option = new Option(a.name+' / '+profile,a.adapter_id+':'+profile); option.selected = fn?.adapter_id===a.adapter_id && fn?.profile===profile; select.add(option);
+    }
+  }
+  if (fn?.adapter_id && !Array.from(select.options).some(option=>option.value===fn.adapter_id+':'+fn.profile)) {
+    const retained=new Option(fn.adapter_id+' / '+fn.profile+' (unavailable)',fn.adapter_id+':'+fn.profile);retained.selected=true;select.add(retained);
+  }
+  const apply = document.createElement('button'); apply.textContent='Apply Adapter'; apply.disabled=!status.reachable;
+  apply.onclick=async()=>{apply.disabled=true;try{const [adapter_id,profile]=select.value.split(':');await mutation('/api/admin/wyvern/bindings',{method:'POST',body:JSON.stringify({bindings:select.value?{derivatives:{adapter_id,profile}}:{},expected_revision:status.binding_revision,request_id:crypto.randomUUID()})});await loadWyvernSettings();showToast('Adapter binding saved');}catch(error){showToast(error.message);apply.disabled=false;}};
+  const connect=document.createElement('button');connect.textContent='Connect through Updater';connect.onclick=async()=>{connect.disabled=true;try{const job=await mutation('/api/admin/wyvern/connect',{method:'POST',body:'{}'});showToast('Connection accepted: '+job.id);await loadWyvernSettings();}catch(error){showToast(error.message);connect.disabled=false;}};
+  const refresh=document.createElement('button');refresh.textContent='Refresh status';refresh.onclick=()=>loadWyvernSettings().catch(error=>showToast(error.message));
+  const help=document.createElement('p');help.textContent='Create Adapters and manage API keys in the host console: sudo updater tui.';
+  box.append(select,apply,connect,refresh,help);
 }
 
 loginForm.addEventListener("submit", async (event) => {

@@ -282,10 +282,10 @@ export async function createLaboratoryApp(overrides = {}) {
     const checks = { kernel: Boolean(register.state.revision) && !register.error, storage: !store.restoreInProgress,
       updater: agents[0].status === "fulfilled" && agents[0].value.available,
       neptune: agents[1].status === "fulfilled", github: Boolean(register.state.githubToken && register.state.githubWebhookSecret),
-      saturn: Boolean(register.state.saturnUrl && register.state.saturnClientToken), ai: !config.derivedContentEnabled || Boolean(register.state.geminiApiKey) };
+      saturn: Boolean(register.state.saturnUrl && register.state.saturnClientToken) };
     const ready = Object.values(checks).every(Boolean);
     res.setHeader("Cache-Control", "private, no-store");
-    res.status(ready ? 200 : 503).json({ ready, checks, external_delivery_verified: false });
+    res.status(ready ? 200 : 503).json({ ready, checks, llm_ready: (await derivedContent.gateway.status()).llm_ready, external_delivery_verified: false });
   });
 
   app.get("/api/content", (_req, res) => res.json(store.getContent()));
@@ -546,7 +546,21 @@ export async function createLaboratoryApp(overrides = {}) {
     catch (error) { next(error); }
   });
 
-  app.get("/api/admin/ai", auth.requireAdmin, (_req, res) => {
+  app.get("/api/admin/wyvern", auth.requireAdmin, async (_req, res) => res.json(await derivedContent.gateway.status()));
+  app.post("/api/admin/wyvern/bindings", auth.requireMutation, async (req, res, next) => {
+    try {
+      if (!req.body || Object.keys(req.body).sort().join(",") !== "bindings,expected_revision,request_id") throw new Error("Provide function bindings and the current revision");
+      res.json(await derivedContent.gateway.call("POST", "/v1/bindings", { data: req.body }));
+    } catch (error) { next(error); }
+  });
+  app.post("/api/admin/wyvern/connect", auth.requireMutation, async (req, res, next) => {
+    try {
+      if (Object.keys(req.body || {}).length) throw new Error("Connection uses the registered service identity");
+      res.status(202).json(await updater.request("POST", "/v1/lifecycle/wyvern-installation", { head_id: config.updaterHeadId, request_id: crypto.randomUUID() }, true));
+    } catch (error) { next(error); }
+  });
+  app.get("/api/admin/ai", auth.requireAdmin, async (_req, res) => {
+    await derivedContent.gateway.status();
     res.json(derivedContent.settings());
   });
 
@@ -556,8 +570,7 @@ export async function createLaboratoryApp(overrides = {}) {
       const enabled = req.body?.enabled;
       if (enabled === true && !previous) {
         config.derivedContentEnabled = true;
-        await register.refresh();
-        if (register.error || !register.state.geminiApiKey) throw new Error(register.error || "Gemini API key is unavailable in Kernel Register");
+        if (!(await derivedContent.gateway.status()).llm_ready) throw new Error("Select a ready Wyvern Adapter in Settings");
       }
       res.json(derivedContent.configure({ enabled, prompt: req.body?.prompt }));
     } catch (error) {
@@ -622,8 +635,8 @@ export async function createLaboratoryApp(overrides = {}) {
     } catch (error) { next(error); }
   });
 
-  app.post("/api/admin/articles/:id/derivatives/regenerate", auth.requireMutation, (req, res, next) => {
-    try { res.status(202).json(derivedContent.regenerate(req.params.id)); }
+  app.post("/api/admin/articles/:id/derivatives/regenerate", auth.requireMutation, async (req, res, next) => {
+    try { await derivedContent.gateway.status(); res.status(202).json(derivedContent.regenerate(req.params.id)); }
     catch (error) { next(error); }
   });
 

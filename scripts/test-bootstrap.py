@@ -46,8 +46,15 @@ with tempfile.TemporaryDirectory(prefix="head-bootstrap-test-") as directory:
     (helper / "install.sh").write_text("#!/bin/sh\nexit 0\n")
     (helper / "updater-linux-amd64").write_text("#!/bin/sh\necho synthetic-helper\n")
     (helper / "systemd/updater.service").write_text("[Service]\nExecStart=/usr/bin/updater\n")
-    for scope in ["updater", "neptune", "gryphon"]:
+    for scope in ["updater", "neptune", "gryphon", "wyvern"]:
         shutil.copyfile(output / (service + ".pem"), helper / "release-trust" / (scope + ".pem"))
+    (helper / "updater-linux-amd64").write_text("#!/bin/sh\nprintf '%s\\n' '{\"schema\":\"exocortex.wyvern.updater.v1\",\"api_version\":1}'\n")
+    (helper / "updater-linux-amd64").chmod(0o755)
+    wyvern = work / "wyvern"
+    wyvern.mkdir()
+    (wyvern / "wyvern-release.json").write_text(json.dumps({"schema":"exocortex.wyvern.release.v1","product":"wyvern","version":"0.0.1","api_version":1,"config_schema":"exocortex.wyvern.config.v1","image":"ghcr.io/test/wyvern@sha256:"+"b"*64,"capabilities":["text","structured_output","pdf"]}))
+    run(["node", "scripts/sign-release.mjs", str(wyvern / "wyvern-release.json")], env=env)
+    env["WYVERN_BUNDLE_DIR"] = str(wyvern)
     env.update({"GITHUB_REPOSITORY": "psewdon1m-exocortex/" + service,
                 "IMAGE_REFERENCE": "ghcr.io/psewdon1m-exocortex/" + service,
                 "IMAGE_DIGEST": "sha256:" + "a" * 64,
@@ -87,7 +94,7 @@ with tempfile.TemporaryDirectory(prefix="head-bootstrap-test-") as directory:
         assert "@sha256:" + "a" * 64 in contents
         assert trust.read_bytes() == assets[service + ".pem"]
         assert "PRIVATE KEY" not in bootstrap.read_text()
-        for scope in ["updater", "neptune", "gryphon"]:
+        for scope in ["updater", "neptune", "gryphon", "wyvern"]:
             assert (target / "updater/release-trust" / (scope + ".pem")).read_bytes() == assets[service + ".pem"]
         assert (Path("/usr/local/sbin") / (service + "-install")).exists()
         before = hashlib.sha256((target / ".env").read_bytes()).digest()

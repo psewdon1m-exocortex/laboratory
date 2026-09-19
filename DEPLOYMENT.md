@@ -1,6 +1,8 @@
 # Deploying laboratory
 
-This runbook applies to the next signed laboratory-v0.1.3 release. Source changes are not a published release. Start only after the exact immutable tag, anonymous assets, signature and Part 12 report pass CI.
+This document retains the historical laboratory-v0.1.3 deployment sequence below. The current Wyvern integration source is a new unpublished candidate: do not deploy it using that old tag. First qualify Kernel 0.3.0 / Volt 0.2.0 publication support, publish Updater 0.6.0 with Wyvern trust, then Wyvern 0.0.1. Update `.release/updater.version` and `.release/updater.sha256` together from the real signed Updater artifact before building the new Laboratory release. Its existing 0.5.0 pin cannot satisfy the Wyvern capability gate. Source changes are not published releases.
+
+The new installer ensures/reuses Wyvern before starting the consumer. Configure its Adapter in `sudo updater tui`, grant Laboratory access, and select `derivatives` in Settings → Wyvern. Application installation can succeed while LLM configuration is still incomplete. Start production only after the exact immutable tag, anonymous assets, signature, Part 12 report and live-provider check pass. See [Wyvern operations](https://github.com/psewdon1m-exocortex/wyvern/blob/main/docs/operations.md).
 
 ## Ownership and release order
 
@@ -48,10 +50,9 @@ Create a separate Volt entry/field for every value below and bind the Register k
 | services.laboratory.credentials.github_token | Scoped content repository credential |
 | services.laboratory.credentials.github_webhook_secret | Independent GitHub webhook HMAC secret |
 | services.laboratory.credentials.saturn_client_token | Saturn Laboratory-client credential for immutable remote assets |
-| services.laboratory.ai.gemini_api_key | Required when LABORATORY_AI_PIPELINE_ENABLED=1; select 0 for an explicitly non-AI deployment |
 | services.laboratory.credentials.google_service_account_base64 | Only when the Google indexing experiment is explicitly enabled; base64 service-account JSON |
 
-IndexNow's verification key is intentionally public and is not an access credential. In Laboratory it is an optional environment setting. GitHub, Saturn, Gemini and Google private credentials are resolved through Kernel, remain in memory and are excluded from backups/log exports. The Kernel URL and initial machine token are the bootstrap exception; subsequent Laboratory connection edits are encrypted locally and excluded from portable recovery.
+IndexNow's verification key is intentionally public and is not an access credential. In Laboratory it is an optional environment setting. GitHub, Saturn and Google indexing private credentials are resolved through Kernel, remain in memory and are excluded from backups/log exports. LLM credentials belong to the selected Wyvern Adapter; Laboratory uses only its own client link and `derivatives` binding. The Kernel URL and initial machine token are the bootstrap exception; subsequent Laboratory connection edits are encrypted locally and excluded from portable recovery.
 
 ### IndexNow production activation
 

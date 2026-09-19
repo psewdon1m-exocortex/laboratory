@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { GoogleGenAI } from "@google/genai";
+import { Wyvern, WyvernError } from "./wyvern.js";
 import { renderMarkdownDocument } from "./article-markdown.js";
 import { normalizeEvidenceText, plainText } from "./seo.js";
 
@@ -199,42 +199,14 @@ export class DerivedContentRuntime {
     this.timer = null;
     this.running = false;
     this.systemInstruction = "";
-    this.ai = null;
-    this.aiKeyFingerprint = "";
-  }
-
-  credential() {
-    const usable = (value) => {
-      const key = String(value || "").replace(/^\uFEFF/, "").trim();
-      return key && key.length <= 512 && !/\s/.test(key) && !/^(?:TEST_ONLY_|CHANGE_ME|PASTE_)/i.test(key)
-        ? key
-        : "";
-    };
-    const key = usable(this.register?.state?.geminiApiKey);
-    return { key, source: key ? "volt" : "none", error: this.register?.error ?? "" };
-  }
-
-  apiKey() {
-    return this.credential().key;
+    this.gateway = new Wyvern({ linkFile: config.wyvernLinkFile });
   }
 
   safeError(error) {
-    const key = this.credential().key;
-    const message = String(error?.message || error).slice(0, 2_000);
-    return key ? message.split(key).join("[REDACTED]") : message;
+    return error instanceof WyvernError ? error.code : "Article derivative processing failed; inspect source and Adapter configuration";
   }
 
-  ensureAi() {
-    if (!this.config.derivedContentEnabled) return null;
-    const apiKey = this.credential().key;
-    if (!apiKey) return null;
-    const fingerprint = sha256(apiKey);
-    if (!this.ai || this.aiKeyFingerprint !== fingerprint) {
-      this.ai = new GoogleGenAI({ apiKey });
-      this.aiKeyFingerprint = fingerprint;
-    }
-    return this.ai;
-  }
+  ensureAi() { return this.config.derivedContentEnabled ? this.gateway : null; }
 
   async start() {
     await this.loadSettings();
@@ -260,14 +232,14 @@ export class DerivedContentRuntime {
 
   status() {
     const counts = Object.fromEntries(this.db.prepare("SELECT status, COUNT(*) AS count FROM article_generation_jobs GROUP BY status").all().map((row) => [row.status, row.count]));
-    const credential = this.credential();
+    const connection = this.gateway.lastStatus;
     return {
       enabled: this.config.derivedContentEnabled,
-      configured: Boolean(credential.key),
-      credentialSource: credential.source,
-      credentialError: credential.error,
-      provider: "google",
-      model: this.config.geminiModel,
+      configured: Boolean(connection.llm_ready),
+      credentialSource: "wyvern",
+      credentialError: connection.code || "",
+      provider: "wyvern",
+      model: "Selected Adapter / derivatives",
       promptVersion: this.promptVersion(),
       jobs: counts,
     };
@@ -331,8 +303,8 @@ export class DerivedContentRuntime {
 
   regenerate(reference) {
     if (!this.config.derivedContentEnabled) throw new Error("AI pipeline is disabled in settings");
-    const credential = this.credential();
-    if (!credential.key) throw new Error(credential.error || "Gemini API key is unavailable in Kernel Register");
+    const connection = this.gateway.lastStatus;
+    if (!connection.llm_ready) throw new WyvernError("wyvern_not_ready");
     const row = this.db.prepare(`
       SELECT a.current_revision_id AS revision_id
       FROM library_articles a
@@ -369,6 +341,7 @@ export class DerivedContentRuntime {
 
   async tick() {
     if (!this.ensureAi() || this.running || this.library.restoreInProgress) return;
+    if (!(await this.gateway.status()).llm_ready || this.running) return;
     const restoreEpoch = this.library.restoreEpoch || 0;
     this.running = true;
     try {
@@ -395,76 +368,47 @@ export class DerivedContentRuntime {
   }
 
   async uploadedPdfPart(job) {
-    const ai = this.ensureAi();
-    if (!ai) throw new Error("Gemini API key is not configured in Kernel Register");
-    const bytes = await fs.readFile(path.join(this.library.rootDir, job.storage_path));
-    const uploaded = await ai.files.upload({
-      file: new Blob([new Uint8Array(bytes)], { type: job.mime || "application/pdf" }),
-      config: { mimeType: job.mime || "application/pdf", displayName: `${job.internal_id}-${revisionLabel(job.revision_number)}.pdf` },
-    });
-    let file = uploaded;
-    for (let attempt = 0; file.state === "PROCESSING" && attempt < 60; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
-      file = await ai.files.get({ name: file.name });
-    }
-    if (file.state && file.state !== "ACTIVE") throw new Error(`Gemini file processing ended in state ${file.state}`);
-    return {
-      part: { fileData: { fileUri: file.uri, mimeType: file.mimeType || "application/pdf" } },
-      name: file.name,
-    };
+    const uploaded = await this.gateway.upload(path.join(this.library.rootDir, job.storage_path), job.mime || "application/pdf");
+    try {
+      let file = uploaded;
+      for (let attempt = 0; file.state === "processing" && attempt < 60; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        file = await this.gateway.media(uploaded.media_id);
+      }
+      if (file.media_id !== uploaded.media_id || file.state !== "active") throw new WyvernError("wyvern_media_not_ready");
+      return { part: { type: "media", media_id: file.media_id }, name: file.media_id };
+    } catch (error) { await this.gateway.media(uploaded.media_id, "DELETE").catch(() => {}); throw error; }
   }
 
   async generate(job) {
-    const ai = this.ensureAi();
-    if (!ai) throw new Error("Gemini API key is not configured in Kernel Register");
+    if (!this.ensureAi()) throw new WyvernError("wyvern_pipeline_disabled");
     let uploadedName = "";
     try {
-      const task = `Create publication derivatives for \"${job.title}\". Source format: ${job.format}.`;
-      const contents = [{ text: task }];
+      const contents = [{ type: "text", text: `Create publication derivatives for "${job.title}". Source format: ${job.format}.` }];
       if (job.format === "markdown") {
-        const sections = markdownSectionCatalog(job.markdown_source);
-        contents.push({ text: `SOURCE SECTION LOCATOR MAP\n${JSON.stringify(sections)}\nEND SOURCE SECTION LOCATOR MAP` });
-        contents.push({ text: `SOURCE MARKDOWN START\n${job.markdown_source}\nSOURCE MARKDOWN END` });
+        contents.push({ type: "text", text: `SOURCE SECTION LOCATOR MAP\n${JSON.stringify(markdownSectionCatalog(job.markdown_source))}\nEND SOURCE SECTION LOCATOR MAP` });
+        contents.push({ type: "text", text: `SOURCE MARKDOWN START\n${job.markdown_source}\nSOURCE MARKDOWN END` });
       } else {
-        const uploaded = await this.uploadedPdfPart(job);
-        contents.push(uploaded.part);
-        uploadedName = uploaded.name;
+        const uploaded = await this.uploadedPdfPart(job); contents.push(uploaded.part); uploadedName = uploaded.name;
       }
-      const response = await ai.models.generateContent({
-        model: this.config.geminiModel,
-        contents,
-        config: {
-          systemInstruction: this.systemInstruction,
-          responseMimeType: "application/json",
-          responseJsonSchema: RESPONSE_SCHEMA,
-          temperature: 0.1,
-          maxOutputTokens: this.config.geminiMaxOutputTokens,
-          thinkingConfig: { thinkingBudget: this.config.geminiThinkingBudget },
-        },
-      });
-      const finishReason = String(response.candidates?.[0]?.finishReason || "").trim();
-      const usage = (response.usageMetadata || finishReason)
-        ? { ...(response.usageMetadata || {}), ...(finishReason ? { finishReason } : {}) }
-        : null;
+      const response = await this.gateway.call("POST", "/v1/generate", { data: { function: "derivatives",
+        messages: [{ role: "system", content: this.systemInstruction }, { role: "user", content: contents }],
+        response_format: { type: "json_schema", schema: RESPONSE_SCHEMA }, options: { temperature: 0.1 } } });
+      const usage = { ...response.usage, finishReason: response.finish_reason };
       this.db.prepare("UPDATE article_generation_jobs SET usage_json = ?, updated_at = ? WHERE revision_id = ?")
-        .run(usage ? JSON.stringify(usage) : null, new Date().toISOString(), job.revision_id);
-      if (finishReason && !["STOP", "FINISH_REASON_UNSPECIFIED"].includes(finishReason)) {
-        throw new Error(`Gemini generation ended with ${finishReason}`);
-      }
-      let parsed;
-      try { parsed = JSON.parse(response.text || ""); }
-      catch (error) { throw new Error(`Gemini returned invalid JSON${finishReason ? ` (${finishReason})` : ""}: ${error.message}`); }
-      const result = { ...validateResult(parsed, job.format), usage };
+        .run(JSON.stringify(usage), new Date().toISOString(), job.revision_id);
+      if (response.finish_reason !== "stop" || !response.target?.model || !response.target?.driver) throw new WyvernError("wyvern_output_incomplete", 422);
+      const result = { ...validateResult(response.json, job.format), usage, target: response.target, configGeneration: response.config_generation };
       return verifyEvidence(result, job, this.library);
-    } finally {
-      if (uploadedName) await ai.files.delete({ name: uploadedName }).catch(() => {});
-    }
+    } finally { if (uploadedName) await this.gateway.media(uploadedName, "DELETE").catch(() => {}); }
   }
 
   async persist(job, result) {
+    const model = result.target?.model || "unknown";
+    const provider = result.target?.driver || "unknown";
     const generatedAt = new Date().toISOString();
     const promptVersion = this.promptVersion();
-    const generationKey = `g-${sha256(`${job.source_sha256}:${promptVersion}:${this.config.geminiModel}:${generatedAt}:${crypto.randomBytes(8).toString("hex")}`).slice(0, 16)}`;
+    const generationKey = `g-${sha256(`${job.source_sha256}:${promptVersion}:${model}:${generatedAt}:${crypto.randomBytes(8).toString("hex")}`).slice(0, 16)}`;
     const relativeRoot = path.posix.join(job.internal_id, revisionLabel(job.revision_number), "derived", generationKey);
     const abstractPath = path.posix.join(relativeRoot, "abstract.md");
     const transcriptPath = result.transcriptMarkdown ? path.posix.join(relativeRoot, "transcript.md") : null;
@@ -474,9 +418,7 @@ export class DerivedContentRuntime {
       schema: "derived-content.v2",
       generationKey,
       sourceSha256: job.source_sha256,
-      provider: "google",
-      model: this.config.geminiModel,
-      thinkingBudget: this.config.geminiThinkingBudget,
+      provider, model, adapter: result.target, configGeneration: result.configGeneration,
       promptVersion,
       generatedAt,
       status: "validated",
@@ -494,7 +436,7 @@ export class DerivedContentRuntime {
         INSERT INTO article_derivatives(revision_id, generation_key, source_sha256, provider, model, prompt_version, description,
           abstract_markdown, transcript_markdown, evidence_json, warnings_json, manifest_json,
           abstract_path, transcript_path, evidence_path, manifest_path, generated_at, updated_at)
-        VALUES (?, ?, ?, 'google', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(revision_id) DO UPDATE SET generation_key = excluded.generation_key,
           source_sha256 = excluded.source_sha256, provider = excluded.provider,
           model = excluded.model, prompt_version = excluded.prompt_version, description = excluded.description,
@@ -503,14 +445,14 @@ export class DerivedContentRuntime {
           abstract_path = excluded.abstract_path, transcript_path = excluded.transcript_path,
           evidence_path = excluded.evidence_path, manifest_path = excluded.manifest_path,
           generated_at = excluded.generated_at, updated_at = excluded.updated_at
-      `).run(job.revision_id, generationKey, job.source_sha256, this.config.geminiModel, promptVersion, result.description,
+      `).run(job.revision_id, generationKey, job.source_sha256, provider, model, promptVersion, result.description,
         result.abstractMarkdown, result.transcriptMarkdown, JSON.stringify(result.evidence), JSON.stringify(result.warnings), JSON.stringify(manifest),
         abstractPath, transcriptPath, evidencePath, manifestPath, generatedAt, generatedAt);
       this.db.prepare(`
         INSERT INTO article_derivative_generations(revision_id, generation_key, source_sha256, provider, model,
           prompt_version, manifest_json, artifact_root, generated_at)
-        VALUES (?, ?, ?, 'google', ?, ?, ?, ?, ?)
-      `).run(job.revision_id, generationKey, job.source_sha256, this.config.geminiModel, promptVersion,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(job.revision_id, generationKey, job.source_sha256, provider, model, promptVersion,
         JSON.stringify(manifest), relativeRoot, generatedAt);
       this.db.prepare("UPDATE article_generation_jobs SET status = 'complete', last_error = NULL, updated_at = ? WHERE revision_id = ?").run(generatedAt, job.revision_id);
       this.library.recordContentEvent({

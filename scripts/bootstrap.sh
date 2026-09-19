@@ -80,7 +80,7 @@ with tarfile.open(work / 'bundle.tar.gz', 'r:gz') as archive:
         destination.parent.mkdir(parents=True, exist_ok=True)
         with archive.extractfile(m) as source: destination.write_bytes(source.read())
         destination.chmod(0o755 if name.endswith('.sh') or name.endswith('updater-linux-amd64') else 0o644)
-for required in ['compose.production.yaml', 'compose.updater.yaml', '.env.example', 'install.sh', 'updater/install.sh', 'updater/updater-linux-amd64', 'updater/systemd/updater.service', *['updater/release-trust/' + s + '.pem' for s in ['updater','neptune','gryphon']]]:
+for required in ['wyvern/wyvern-release.json', 'wyvern/wyvern-release.json.sig.json', 'compose.production.yaml', 'compose.updater.yaml', '.env.example', 'install.sh', 'updater/install.sh', 'updater/updater-linux-amd64', 'updater/systemd/updater.service', *['updater/release-trust/' + s + '.pem' for s in ['updater','neptune','gryphon','wyvern']]]:
     if not (stage / required).is_file(): raise SystemExit('Incomplete release: ' + required)
 env = dict(line.split('=',1) for line in (stage / '.env.example').read_text().splitlines() if '=' in line and not line.startswith('#'))
 prefix = service.upper()

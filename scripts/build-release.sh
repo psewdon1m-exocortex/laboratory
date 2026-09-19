@@ -10,6 +10,7 @@ repository="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 image_reference="${IMAGE_REFERENCE:?IMAGE_REFERENCE is required}"
 image_digest="${IMAGE_DIGEST:?IMAGE_DIGEST is required}"
 updater_dir="${UPDATER_BUNDLE_DIR:?UPDATER_BUNDLE_DIR is required}"
+wyvern_dir="${WYVERN_BUNDLE_DIR:?WYVERN_BUNDLE_DIR with signed manifest is required}"
 updater_version="${UPDATER_BUNDLE_VERSION:?UPDATER_BUNDLE_VERSION is required}"
 pinned_updater_version="$(tr -d '[:space:]' < "$root/.release/updater.version")"
 
@@ -27,7 +28,7 @@ pinned_updater_version="$(tr -d '[:space:]' < "$root/.release/updater.version")"
 mkdir -p "$output"
 public_key="${RELEASE_PUBLIC_KEY_FILE:-$output/laboratory.pem}"
 [[ -f "$public_key" ]] || { echo 'Export the release public key before building' >&2; exit 6; }
-for scope in updater neptune gryphon; do
+for scope in updater neptune gryphon wyvern; do
   [[ -f "$updater_dir/release-trust/$scope.pem" ]] || { echo "Missing signed Updater trust scope $scope" >&2; exit 6; }
 done
 [[ "$version" == "$(node -p "require('./services/api/package.json').version")" ]] || { echo 'Source/release version mismatch' >&2; exit 6; }
@@ -36,6 +37,10 @@ trap 'rm -rf "$stage"' EXIT
 cp "$root/compose.production.yaml" "$root/compose.updater.yaml" \
   "$root/.env.example" "$root/README.md" "$root/DEPLOYMENT.md" "$root/nginx.server.example.conf" "$root/install.sh" "$stage/"
 cp -R "$updater_dir" "$stage/updater"
+"$updater_dir/updater-linux-amd64" wyvern capabilities >/dev/null
+python3 "$root/scripts/verify-wyvern-bundle.py" "$wyvern_dir" "$updater_dir/release-trust/wyvern.pem"
+mkdir -p "$stage/wyvern"
+cp "$wyvern_dir/wyvern-release.json" "$wyvern_dir/wyvern-release.json.sig.json" "$stage/wyvern/"
 find "$stage/updater" -type f -name '*.sh' -exec chmod 0755 {} +
 chmod 0755 "$stage/install.sh" "$stage/updater/updater-linux-amd64"
 sed -i \

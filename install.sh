@@ -67,8 +67,18 @@ copy_release_files() {
     install -m 0755 "$script_dir/updater/install.sh" "$script_dir/updater/updater-linux-amd64" "$target/updater/"
     install -m 0644 "$script_dir/updater/systemd/updater.service" "$target/updater/systemd/updater.service"
     install -d -m 0755 "$target/updater/release-trust"
-    for scope in updater neptune gryphon; do install -m 0644 "$script_dir/updater/release-trust/$scope.pem" "$target/updater/release-trust/$scope.pem"; done
+    for scope in updater neptune gryphon wyvern; do install -m 0644 "$script_dir/updater/release-trust/$scope.pem" "$target/updater/release-trust/$scope.pem"; done
   fi
+}
+
+copy_wyvern_bundle() {
+  for name in wyvern-release.json wyvern-release.json.sig.json; do
+    [ -f "$script_dir/wyvern/$name" ] || fail "release bundle is missing wyvern/$name"
+    if [ "$script_dir" != "$target" ]; then
+      install -d -m 0755 "$target/wyvern"
+      install -m 0644 "$script_dir/wyvern/$name" "$target/wyvern/$name"
+    fi
+  done
 }
 
 prepare_updater_mount() {
@@ -94,6 +104,7 @@ prepare_neptune_mounts() {
 }
 
 prepare_config() {
+  copy_wyvern_bundle
   command -v openssl >/dev/null 2>&1 || fail "openssl is not installed"
   created=0
   if [ ! -f "$env_file" ]; then
@@ -127,6 +138,8 @@ validate_install() {
 install_release() {
   validate_install
   "$target/updater/install.sh" "$service_id" "$env_file" "$target/updater/updater-linux-amd64"
+  updater wyvern capabilities >/dev/null || fail "Updater with Wyvern v1 is required"
+  updater wyvern bootstrap --head laboratory --manifest "$target/wyvern/wyvern-release.json"
   socket_dir=$(get_env UPDATER_SOCKET_DIR); socket_dir=${socket_dir:-/run/exocortex}
   socket_attempt=0
   while [ ! -S "$socket_dir/updater.sock" ] && [ "$socket_attempt" -lt 10 ]; do

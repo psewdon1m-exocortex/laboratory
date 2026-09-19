@@ -80,6 +80,10 @@ jobs:
           printf '%s  %s\n' "$(tr -d '[:space:]' < .release/updater.sha256)" "updater-${updater_version}-install.tar.gz" > .release-inputs/updater-pinned.sha256
           (cd .release-inputs && sha256sum -c updater-pinned.sha256)
           tar -xzf ".release-inputs/updater-${updater_version}-install.tar.gz" -C .release-inputs
+          wyvern_version="$(tr -d '[:space:]' < .release/wyvern.version)"
+          mkdir -p .release-inputs/wyvern
+          gh release download "wyvern-v${wyvern_version}" --repo psewdon1m-exocortex/wyvern --dir .release-inputs/wyvern --pattern wyvern-release.json --pattern wyvern-release.json.sig.json
+          python3 scripts/verify-wyvern-bundle.py .release-inputs/wyvern .release-inputs/updater/release-trust/wyvern.pem
 
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
@@ -172,6 +176,7 @@ jobs:
         run: |
           updater_version="$(tr -d '[:space:]' < .release/updater.version)"
           UPDATER_BUNDLE_DIR="$PWD/.release-inputs/updater" \
+          WYVERN_BUNDLE_DIR="$PWD/.release-inputs/wyvern" \
           UPDATER_BUNDLE_VERSION="$updater_version" \
             bash scripts/build-release.sh "${{ needs.prepare.outputs.version }}"
           node scripts/verify-release.mjs release-artifacts/laboratory-release.json

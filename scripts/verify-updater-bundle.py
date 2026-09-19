@@ -14,7 +14,7 @@ with tarfile.open(root / name) as archive:
         p = pathlib.PurePosixPath(member.name)
         if p.is_absolute() or '..' in p.parts or not p.parts or p.parts[0] != 'updater' or member.name in seen or not (member.isfile() or member.isdir()): raise SystemExit('Unsafe Updater archive')
         seen.add(member.name)
-    required = ['updater/install.sh', 'updater/updater-linux-amd64', 'updater/systemd/updater.service', *['updater/release-trust/' + scope + '.pem' for scope in ['updater','neptune','gryphon']]]
+    required = ['updater/install.sh', 'updater/updater-linux-amd64', 'updater/systemd/updater.service', *['updater/release-trust/' + scope + '.pem' for scope in ['updater','neptune','gryphon','wyvern']]]
     if any(name not in seen for name in required): raise SystemExit('Incomplete helper installer or trust set')
     binary = archive.extractfile('updater/updater-linux-amd64').read()
     if hashlib.sha256(binary).hexdigest() != manifest.get('binary', {}).get('sha256'): raise SystemExit('Bundled Updater executable differs from its signed digest')

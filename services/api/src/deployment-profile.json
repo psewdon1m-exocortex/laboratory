@@ -2,7 +2,8 @@
   "schema": "exocortex.head.profile.v1",
   "service": "laboratory",
   "helpers": [
-    "neptune"
+    "neptune",
+    "wyvern"
   ],
   "keys": {
     "repositories.laboratory.url": "github-repository",
@@ -18,9 +19,6 @@
     "services.laboratory.credentials.saturn_client_token": "secret"
   },
   "conditionalKeys": {
-    "derivedContentEnabled": {
-      "services.laboratory.ai.gemini_api_key": "secret"
-    },
     "googleIndexingExperimentEnabled": {
       "services.laboratory.credentials.google_service_account_base64": "secret"
     }
