@@ -260,7 +260,7 @@ test("SQLite content model seeds English pages and searchable articles", async (
   assert.throws(() => validateUpload("aboutMarkdown", { buffer: Buffer.from([0xff, 0xfe]) }), /UTF-8 Markdown/);
 
   const backup = parseBackup(await createBackup(store, "0.1.0-test"));
-  assert.equal(backup.snapshot.schema, "exocortex.laboratory.backup.v3");
+  assert.equal(backup.snapshot.schema, "exocortex.laboratory.backup.v4");
   assert.equal(backup.manifest.schema, "exocortex.laboratory.backup-manifest.v2");
   assert.equal(backup.manifest.members.find((member) => member.name === "laboratory-backup.json").records.articles, 3);
   assert.ok(Object.keys(backup.files).some((name) => name.startsWith("assets/aboutMarkdown/")));

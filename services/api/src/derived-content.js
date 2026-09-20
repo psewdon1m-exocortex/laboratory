@@ -199,7 +199,7 @@ export class DerivedContentRuntime {
     this.timer = null;
     this.running = false;
     this.systemInstruction = "";
-    this.gateway = new Wyvern({ linkFile: config.wyvernLinkFile });
+    this.gateway = new Wyvern({ linkFile: config.wyvernLinkFile, db: this.db });
   }
 
   safeError(error) {

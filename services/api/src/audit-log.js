@@ -90,21 +90,19 @@ export class AuditLog {
     }, { level: 6 }));
   }
 
-  list(limit = 200) {
-    const result = this.queue.then(() => this.readList(limit));
+  list(limit = 200, before = null) {
+    const result = this.queue.then(() => this.readList(limit, before));
     this.queue = result.then(() => {}, () => {});
     return result;
   }
 
-  async readList(limit) {
-    await this.rotateIfNeeded();
+  async readList(limit, before = null) {
     const maximum = Math.max(1, Math.min(1000, Number.isFinite(limit) ? limit : 200));
-    let recent = [];
-    for (let index = 0; index <= RETAINED_FILES && recent.length < maximum; index++) {
-      try { const text = await fs.readFile(index ? `${this.filename}.${index}` : this.filename, "utf8"); recent = [...text.trim().split("\n").filter(Boolean), ...recent].slice(-maximum); }
-      catch (error) { if (error.code !== "ENOENT") throw error; }
-    }
-    const lines = recent.reverse();
-    return lines.map((line) => JSON.parse(line));
+    const rows = (await this.readJsonl()).trim().split("\n").filter(Boolean).reverse().map(line => ({
+      ...JSON.parse(line), id: crypto.createHash("sha256").update(line).digest("hex"),
+    }));
+    const offset = before === null ? 0 : rows.findIndex(row => row.id === before) + 1;
+    if (before !== null && offset === 0) throw Object.assign(new Error("The log cursor expired from retention. Refresh newest."), { status: 409 });
+    return rows.slice(offset, offset + maximum);
   }
 }

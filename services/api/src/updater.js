@@ -86,9 +86,9 @@ export class UpdaterClient {
     }, true, 30_000);
   }
 
-  initializeNeptune(enrollmentCode, exportUrl) {
+  initializeNeptune(enrollmentCode, exportUrl, requestId = crypto.randomUUID()) {
     return this.request("POST", "/v1/components/neptune-linux/initialize", {
-      request_id: crypto.randomUUID(), head_id: this.headId, project_id: "laboratory",
+      request_id: requestId, head_id: this.headId, project_id: "laboratory",
       enrollment_code: enrollmentCode, export_url: exportUrl,
     }, true, 30_000);
   }

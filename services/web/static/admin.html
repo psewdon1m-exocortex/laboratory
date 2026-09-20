@@ -102,13 +102,19 @@
           </div>
           <dl class="runtime-grid" data-neptune-runtime></dl>
           <div class="neptune-controls">
-            <p>Schedules and remote backup runs are managed in Saturn → Synchronization.</p>
-            <form class="neptune-initialize-form" data-neptune-initialize><label>Saturn setup code<input name="enrollment_code" required minlength="32" maxlength="32" autocomplete="off" /></label><button type="submit">Initialize Neptune</button></form>
+            <p>Set this service’s automatic backup schedule and request remote backups here.</p>
+            <div data-backup-policy></div>
+            <button type="button" data-neptune-initialize>Initialize</button>
           </div>
-          <div class="system-actions">
+          <div class="neptune-version-group"><h3>Neptune version</h3><p>Current installed version: <span data-neptune-version>Checking…</span></p>
             <button type="button" class="button-quiet" data-neptune-check>Check Neptune for updates</button>
           </div>
           <p class="admin-note" data-neptune-result></p>
+        </section>
+
+        <section class="admin-card section-card laboratory-agents">
+          <div class="section-heading"><h2>Logs</h2><p>Operational history, newest events first.</p></div>
+          <div data-service-logs></div>
         </section>
 
         <section class="admin-card section-card">
@@ -129,7 +135,7 @@
         </section>
 
         <section class="admin-card section-card">
-          <div class="section-heading"><h2>Wyvern</h2><p>Connection to the LLM gateway and Adapter for article derivatives.</p></div>
+          <div class="section-heading"><h2>Wyverne Connection</h2><p>Connection to the LLM gateway and Adapter for article derivatives.</p></div>
           <div data-wyvern-settings>Checking connection…</div>
         </section>
 
@@ -150,7 +156,7 @@
         </section>
 
         <section class="admin-card section-card">
-          <div class="section-heading"><h2>Update</h2><p>Laboratory release and local Updater binding.</p></div>
+          <div class="section-heading"><h2>Updates</h2><p>Laboratory release and local Updater binding.</p></div>
           <dl class="runtime-grid update-runtime">
             <dt>Current version</dt><dd data-update-version></dd>
             <dt>Updater</dt><dd data-updater-status></dd>
@@ -232,6 +238,8 @@
       </div>
     </dialog>
     <div class="toast" data-toast hidden></div>
+    <link rel="stylesheet" href="/scripts/service-agents.css" />
+    <link rel="stylesheet" href="/scripts/service-logs.css" />
     <script type="module" src="/scripts/admin.js"></script>
   </body>
 </html>

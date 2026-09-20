@@ -112,7 +112,9 @@ export async function createBackup(store, version, attempt = 0) {
   if (store.restoreInProgress) throw new Error("Cannot export during restore");
   const epoch = store.restoreEpoch;
   const changes = store.db.prepare("SELECT total_changes() AS count").get().count;
-  const snapshot = store.exportSnapshot();
+  const intent = await store.backupPolicy?.exportIntent();
+  const snapshot = { ...store.exportSnapshot(), backup_policy: intent ?? null };
+  snapshot.wyvern = await store.wyvern.exportIntent();
   const data = Buffer.from(JSON.stringify(snapshot, null, 2));
   let files;
   try { files = await store.backupFiles(snapshot); }

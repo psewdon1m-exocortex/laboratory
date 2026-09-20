@@ -2,7 +2,7 @@
 
 This document specializes [Part 03 — backup and recovery](https://github.com/psewdon1m-exocortex/general/blob/main/PART_03_BACKUP_AND_RECOVERY.md); that central contract remains authoritative.
 
-New backups use `exocortex.laboratory.backup.v3` inside `exocortex.laboratory.backup-manifest.v2`. Restore remains compatible with v1 and v2 archives.
+New backups use `exocortex.laboratory.backup.v4` inside `exocortex.laboratory.backup-manifest.v2`. Restore remains compatible with v1, v2 and v3 archives. Older application versions cannot restore v4; retain the pre-update backup for rollback.
 
 ## Included state
 
@@ -12,11 +12,14 @@ New backups use `exocortex.laboratory.backup.v3` inside `exocortex.laboratory.ba
 - every article revision, source file, media and attachment;
 - deleted/unpublished URL tombstones and Git synchronization state;
 - generated abstracts, transcripts, evidence manifests and immutable generation artifacts;
-- durable AI generation jobs and search-notification jobs/state.
+- durable AI generation jobs and search-notification jobs/state;
+- this consumer's Wyvern function → Adapter/profile intent, instance/client IDs and observed revision.
 
 The manifest inventories every member with its uncompressed size and SHA-256. The logical data member also records row counts per authoritative collection.
 
 The Access Key verifier and session generation are included as recovery metadata. Restore revokes existing sessions and retains the target machine enrollment. Plaintext secrets, session cookies, `.env`, Kernel Register cache, the rebuildable FTS evidence index, raw public telemetry, transient restore staging, pre-restore checkpoints and audit logs are intentionally excluded. Telemetry is deliberately local and retention-bounded; audit records have a separate manifest/checksum ZIP export in `/private` and must be shipped or archived by the operator if longer retention is required.
+
+Wyvern link tokens, provider keys and shared Adapter configuration are excluded. Creating a backup observes current own-client bindings; if a previously configured link is unavailable, creation fails rather than omitting intent. Restoring configured intent marks it `pending_verification` without changing shared Wyvern. Inference requires matching authoritative scope/bindings or an explicit new binding selection in Settings. Legacy v1–v3 archives retain the target's existing intent. Re-exporting pending intent preserves it.
 
 ## Safety limits and validation
 

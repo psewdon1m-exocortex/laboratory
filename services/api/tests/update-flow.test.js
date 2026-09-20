@@ -35,7 +35,7 @@ test("Laboratory update uses one standard ZIP, enforces session/CSRF/save receip
   const downloaded = await fetch(`${base}/api/update-flow/backup`, { method: "POST", headers, body: JSON.stringify({ version: "0.1.8" }) });
   assert.equal(downloaded.status, 200);
   const archive = Buffer.from(await downloaded.arrayBuffer());
-  assert.equal(parseBackup(archive).snapshot.schema, "exocortex.laboratory.backup.v3");
+  assert.equal(parseBackup(archive).snapshot.schema, "exocortex.laboratory.backup.v4");
   const raw = { ...headers, "content-type": "application/octet-stream", "X-Update-Receipt": downloaded.headers.get("x-update-receipt") };
   assert.equal((await fetch(`${base}/api/update-flow/install/laboratory`, { method: "POST", headers: raw, body: archive })).status, 400);
   raw["X-Update-Saved"] = "1";

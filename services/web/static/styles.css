@@ -2281,3 +2281,16 @@ button.admin-article-row:focus-visible {
     display: none;
   }
 }
+
+[data-admin-protected] .exo-wyvern-connection { gap: 2.75rem; }
+[data-admin-protected] .exo-agent-group > h3 { font-family: inherit; }
+[data-admin-protected] .exo-agent-muted { color: inherit; opacity: .75; }
+[data-admin-protected] .exo-agent-success { color: var(--positive,#385943); }
+[data-admin-protected] .exo-agent-error { color: var(--negative,#a32626); }
+dialog.exo-initialize.laboratory { height: fit-content; }
+dialog.exo-initialize.laboratory > header h2 { font-family: inherit; line-height: 29px; }
+
+[data-admin-protected] .exo-backup-policy { --exo-check-inset: var(--surface, #eeeae2); }
+[data-admin-protected] .exo-wyvern-connection { --success: var(--positive, #385943); --danger: var(--negative, #a32626); }
+:root[data-theme="dark"] [data-admin-protected] { --positive: #99bda3; --negative: #ef9991; }
+.neptune-version-group { margin-top: 2.75rem; }

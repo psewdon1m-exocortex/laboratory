@@ -1,9 +1,12 @@
+import { restoredPolicyRecord } from "./backup-policy.js";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ArticleLibrary } from "./article-library.js";
 import { OperatorSecurity } from "./auth.js";
+import { Wyvern } from "./wyvern.js";
+import { INTENT_KEY, emptyIntent, readIntent, saveIntent, validateIntent } from "./wyvern-intent.js";
 
 const DEFAULT_SETTINGS = {
   siteTitle: "Laboratory",
@@ -165,6 +168,7 @@ export class LaboratoryStore {
     for (const slot of Object.keys(UPLOAD_SLOTS)) await fs.mkdir(path.join(this.uploadsDir, slot), { recursive: true });
     await fs.mkdir(path.join(this.uploadsDir, "articles"), { recursive: true });
     this.db = new DatabaseSync(this.databasePath);
+    this.wyvern = new Wyvern({ linkFile: this.config.wyvernLinkFile, db: this.db });
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.security = new OperatorSecurity(this.db, this.config);
@@ -413,9 +417,10 @@ export class LaboratoryStore {
 
   exportSnapshot() {
     return {
-      schema: "exocortex.laboratory.backup.v3",
+      schema: "exocortex.laboratory.backup.v4",
       exportedAt: new Date().toISOString(),
-      settings: this.db.prepare("SELECT key, value FROM settings ORDER BY key").all(),
+      settings: this.db.prepare("SELECT key, value FROM settings WHERE key != ? AND key != 'backup_policy_restore' ORDER BY key").all(INTENT_KEY),
+      wyvern: readIntent(this.db) ?? emptyIntent(),
       assets: this.db.prepare("SELECT * FROM assets ORDER BY slot").all(),
       contentEvents: this.db.prepare("SELECT * FROM public_content_events ORDER BY id").all(),
       library: this.library.exportSnapshot(),
@@ -491,8 +496,11 @@ export class LaboratoryStore {
   }
 
   async restoreSnapshot(snapshot, files) {
+    const policy = restoredPolicyRecord(snapshot?.backup_policy);
     if (this.restoreInProgress) throw new Error("A restore is already in progress");
-    if (!["exocortex.laboratory.backup.v1", "exocortex.laboratory.backup.v2", "exocortex.laboratory.backup.v3"].includes(snapshot?.schema)) throw new Error("Unsupported Laboratory backup schema");
+    if (!["exocortex.laboratory.backup.v1", "exocortex.laboratory.backup.v2", "exocortex.laboratory.backup.v3", "exocortex.laboratory.backup.v4"].includes(snapshot?.schema)) throw new Error("Unsupported Laboratory backup schema");
+    const intent = snapshot.schema === "exocortex.laboratory.backup.v4" ? validateIntent(snapshot.wyvern) : readIntent(this.db);
+    if (intent && snapshot.schema === "exocortex.laboratory.backup.v4" && intent.state !== "unconfigured") intent.state = "pending_verification";
     if (!Array.isArray(snapshot.settings) || !Array.isArray(snapshot.assets)) {
       throw new Error("Invalid Laboratory backup structure");
     }
@@ -556,6 +564,7 @@ export class LaboratoryStore {
         this.db.exec("DELETE FROM settings; DELETE FROM assets; DELETE FROM public_content_events;");
         const settingInsert = this.db.prepare("INSERT INTO settings(key, value) VALUES (?, ?)");
         for (const item of snapshot.settings) settingInsert.run(item.key, item.value);
+        settingInsert.run("backup_policy_restore", JSON.stringify(policy));
         const assetInsert = this.db.prepare("INSERT INTO assets(slot, filename, original_name, mime, size, sha256, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
         for (const item of snapshot.assets) assetInsert.run(item.slot, item.filename, item.original_name, item.mime, item.size, item.sha256, item.updated_at);
         const eventInsert = this.db.prepare(`
@@ -579,6 +588,7 @@ export class LaboratoryStore {
           this.library.restoreDatabase(snapshot.library);
         }
         this.restoreNotificationDatabase(snapshot);
+        if (intent) saveIntent(this.db, intent);
         if (snapshot.recovery && snapshot.recovery.version !== 1) throw new Error("Unsupported recovery metadata");
         this.security.restore(snapshot.recovery?.security);
         const restoredScope = this.db.prepare("SELECT 1 FROM public_content_events WHERE scope = ? LIMIT 1");

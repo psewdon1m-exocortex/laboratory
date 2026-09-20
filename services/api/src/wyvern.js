@@ -2,12 +2,13 @@ import fs from "node:fs/promises";
 import { constants, createReadStream } from "node:fs";
 import http from "node:http";
 import https from "node:https";
+import { readIntent, emptyIntent, intentFromStatus, intentMatches } from "./wyvern-intent.js";
 
 export class WyvernError extends Error {
   constructor(code, status = 503) { super(code); this.code = code; this.status = status; }
 }
 export class Wyvern {
-  constructor({ linkFile = "/run/wyvern-link/link.json" } = {}) { this.linkFile = linkFile; this.lastStatus = { llm_ready: false, reachable: false, client_linked: false }; }
+  constructor({ linkFile = "/run/wyvern-link/link.json", db = null } = {}) { this.linkFile = linkFile; this.db = db; this.lastStatus = { llm_ready: false, reachable: false, client_linked: false }; }
   async link() {
     let file;
     try {
@@ -26,6 +27,12 @@ export class Wyvern {
   async call(method, route, { data, stream, size, mime, func, timeout = 300000 } = {}) {
     let link;
     try { link = await this.link(); } catch (error) { stream?.destroy(); throw error; }
+    try {
+      const intent = readIntent(this.db);
+      if (intent?.state === "pending_verification" && ["/v1/generate", "/v1/count-tokens", "/v1/media"].includes(route)) {
+        if (!intentMatches(intent, await this.call("GET", "/v1/client", { timeout: 8000 }))) throw new WyvernError("wyvern_restore_pending", 409);
+      }
+    } catch (error) { stream?.destroy(); throw error; }
     const target = new URL(link.mode === "local" ? "http://wyvern.local" : link.url);
     target.pathname = target.pathname.replace(/\/$/, "") + route;
     const body = data === undefined ? undefined : Buffer.from(JSON.stringify(data));
@@ -52,9 +59,24 @@ export class Wyvern {
     try {
       const link = await this.link(), result = await this.call("GET", "/v1/client", { timeout: 8000 });
       if (result.schema !== "exocortex.wyvern.client.v1" || result.client_id !== link.client_id || result.instance_id !== link.instance_id) throw new WyvernError("wyvern_identity_mismatch");
-      this.lastStatus = { ...result, mode: link.mode, link_configured: true };
-    } catch (error) { this.lastStatus = { reachable: false, client_linked: false, llm_ready: false, link_configured: error.code !== "wyvern_not_configured", code: error instanceof WyvernError ? error.code : "wyvern_unavailable" }; }
+      this.lastStatus = { ...result, mode: link.mode, link_configured: true, last_verified_at: new Date().toISOString(), stale: false };
+      const intent = readIntent(this.db);
+      if (intent?.state === "pending_verification" && !intentMatches(intent, result)) Object.assign(this.lastStatus, { llm_ready: false, code: "wyvern_restore_pending", recovery_intent: intent });
+    } catch (error) { this.lastStatus = { ...this.lastStatus, stale: true, reachable: false, client_linked: false, llm_ready: false, link_configured: error.code !== "wyvern_not_configured", code: error instanceof WyvernError ? error.code : "wyvern_unavailable" }; }
     return this.lastStatus;
+  }
+  async exportIntent() {
+    const retained = readIntent(this.db);
+    if (retained?.state === "pending_verification") return retained;
+    try { await fs.lstat(this.linkFile); }
+    catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      if (retained && retained.state !== "unconfigured") throw new WyvernError("wyvern_backup_unavailable");
+      return emptyIntent();
+    }
+    const link = await this.link(), status = await this.call("GET", "/v1/client", { timeout: 8000 });
+    if (status.schema !== "exocortex.wyvern.client.v1" || status.client_id !== link.client_id || status.instance_id !== link.instance_id) throw new WyvernError("wyvern_identity_mismatch");
+    return intentFromStatus(status);
   }
   async upload(filename, mime = "application/pdf") {
     const stat = await fs.stat(filename);

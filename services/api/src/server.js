@@ -22,10 +22,12 @@ import { buildArticleArchive, MAX_ARTICLE_ARCHIVE_BYTES } from "./article-archiv
 import { renderMarkdownDocument } from "./article-markdown.js";
 import { loadConfig } from "./config.js";
 import { DerivedContentRuntime } from "./derived-content.js";
+import { intentFromStatus, saveIntent } from "./wyvern-intent.js";
 import { EvidenceIndex } from "./evidence-index.js";
 import { GitHubArticleLibrary } from "./github-library.js";
-import { KernelRegisterRuntime } from "./kernel-register.js";
+import { KernelRegisterRuntime, resolveKernelValues } from "./kernel-register.js";
 import { loadKernelConnection, saveKernelConnection } from "./kernel-connection.js";
+import { createBackupPolicy } from "./backup-policy.js";
 import { createNeptuneClient } from "./neptune-client.js";
 import { generateArticleOg } from "./og-image.js";
 import { handleMcpRequest, mcpCors } from "./mcp.js";
@@ -76,6 +78,12 @@ export async function createLaboratoryApp(overrides = {}) {
   store.library.resolveSaturnOrigin = () => register.state.saturnUrl;
   const updater = new UpdaterClient(config);
   const neptune = createNeptuneClient(config);
+  const backupPolicy = createBackupPolicy({
+    client: neptune, configured: () => Boolean(config.neptuneControlTokenFile && fs.existsSync(config.neptuneControlTokenFile)),
+    readPending: () => JSON.parse(store.db.prepare("SELECT value FROM settings WHERE key='backup_policy_restore'").get()?.value || "null"),
+    writePending: value => store.db.prepare("INSERT INTO settings(key,value) VALUES ('backup_policy_restore',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(value)),
+  });
+  store.backupPolicy = backupPolicy;
   const saturnLibrary = new SaturnArticleBundleClient(config, register);
   const githubLibrary = new GitHubArticleLibrary(config, register, store.library, saturnLibrary);
   githubLibrary.start();
@@ -172,12 +180,8 @@ export async function createLaboratoryApp(overrides = {}) {
     for (const remoteOrigin of new Set(preconnectOrigins)) values.push(`<${remoteOrigin}>; rel="preconnect"`);
     res.setHeader("Link", values.join(", "));
   };
-  const restoreFromBuffer = async (buffer, keepRestorePoint = true) => {
+  const restoreFromBuffer = async (buffer) => {
     const parsed = await parseBackupAsync(buffer);
-    if (keepRestorePoint) {
-      const restorePoint = await createBackup(store, config.version);
-      await store.saveRestorePoint(restorePoint);
-    }
     const restored = await store.restoreSnapshot(parsed.snapshot, parsed.files);
     await derivedContent.loadSettings();
     return restored;
@@ -535,8 +539,8 @@ export async function createLaboratoryApp(overrides = {}) {
 
   app.get("/api/admin/documentation", auth.requireAdmin, (_req, res) => res.json({ sections: [
     { title: "Security", body: "Sign in with the Access Key. Rotation revokes other sessions. Kernel tokens are write-only and validated before replacement." },
-    { title: "Recovery", body: "ZIP archives include content, settings, revisions, queues and the Access Key verifier. Restore replaces application state and signs out all sessions. Target machine enrollment remains in place." },
-    { title: "Connections", body: "Kernel resolves current service origins and provider credentials. Initialize Neptune with a setup code from Saturn. Schedules and remote backup runs are managed in Saturn → Synchronization." },
+    { title: "Recovery", body: "ZIP archives include content, settings, revisions, queues, the Access Key verifier and non-secret Wyvern binding choices. Restore replaces application state and signs out all sessions. Target machine enrollment remains in place. Restored Wyvern choices await matching bindings or explicit selection in Settings; restore never changes the shared gateway." },
+    { title: "Connections", body: "Kernel resolves current service origins. Wyvern holds provider credentials and executes requests through the selected Adapter. Initialize Neptune with a setup code from Saturn. Schedules and remote backup runs are managed in Saturn → Synchronization." },
     { title: "Updates", body: "Updater checks scoped signed releases, makes a recovery archive and verifies health after replacement. Monitor the job until it reaches a terminal state." },
     { title: "Part 12: deployment checks", body: "Check core readiness, enrollment, last seen and last successful backup separately. Unknown or stale does not mean zero. After a change verify public DNS/TLS, authenticated integrations and a downloaded-backup restore. Keep the job ID and redacted logs when investigating a failure; never include access keys or tokens." }
   ] }));
@@ -547,16 +551,28 @@ export async function createLaboratoryApp(overrides = {}) {
   });
 
   app.get("/api/admin/wyvern", auth.requireAdmin, async (_req, res) => res.json(await derivedContent.gateway.status()));
+  app.get("/api/admin/wyvern/management", auth.requireAdmin, async (_req, res) => {
+    const key = "services.wyvern.management_url";
+    let record;
+    try { record = (await resolveKernelValues(config, [key]))[key]; }
+    catch { return res.status(503).json({ error: "An authorized gateway management destination is not available in Kernel." }); }
+    if (record?.secret !== false) return res.status(409).json({ error: "The management destination must be a public Register value." });
+    const url = new URL(record.value);
+    if (url.protocol !== "https:" || url.username || url.password) return res.status(409).json({ error: "Invalid gateway management destination." });
+    return res.json({ url: url.href });
+  });
   app.post("/api/admin/wyvern/bindings", auth.requireMutation, async (req, res, next) => {
     try {
       if (!req.body || Object.keys(req.body).sort().join(",") !== "bindings,expected_revision,request_id") throw new Error("Provide function bindings and the current revision");
-      res.json(await derivedContent.gateway.call("POST", "/v1/bindings", { data: req.body }));
+      const result = await derivedContent.gateway.call("POST", "/v1/bindings", { data: req.body });
+      saveIntent(store.db, intentFromStatus(result));
+      res.json(result);
     } catch (error) { next(error); }
   });
   app.post("/api/admin/wyvern/connect", auth.requireMutation, async (req, res, next) => {
     try {
-      if (Object.keys(req.body || {}).length) throw new Error("Connection uses the registered service identity");
-      res.status(202).json(await updater.request("POST", "/v1/lifecycle/wyvern-installation", { head_id: config.updaterHeadId, request_id: crypto.randomUUID() }, true));
+      if (Object.keys(req.body || {}).join(",") !== "request_id" || !/^[0-9a-f-]{36}$/i.test(req.body.request_id)) return res.status(400).json({ error: "Provide a stable initialization request ID. The service identity is derived on the server." });
+      res.status(202).json(await updater.request("POST", "/v1/lifecycle/wyvern-installation", { head_id: config.updaterHeadId, request_id: req.body.request_id }, true));
     } catch (error) { next(error); }
   });
   app.get("/api/admin/ai", auth.requireAdmin, async (_req, res) => {
@@ -689,12 +705,30 @@ export async function createLaboratoryApp(overrides = {}) {
     } catch (error) { next(error); }
   }));
 
+  app.head("/api/internal/neptune/backup", (req, res, next) => {
+    try {
+      if (!config.neptuneExportTokenFile || !fs.existsSync(config.neptuneExportTokenFile)
+        || !safeCompare(req.get("Authorization"), `Bearer ${fs.readFileSync(config.neptuneExportTokenFile, "utf8").trim()}`)) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      if (store.restoreInProgress) return res.status(503).end();
+      store.db.prepare("SELECT 1").get();
+      return res.set("X-Neptune-Ready", "1").status(204).end();
+    } catch (error) { next(error); }
+  });
+  app.get("/api/neptune/availability", auth.requireAdmin, async (_req, res) => res.json(await neptune.availability()));
+  app.get("/api/neptune/policy", auth.requireAdmin, async (_req, res) => res.json(await backupPolicy.read()));
+  app.put("/api/neptune/policy", auth.requireMutation, async (req, res) => res.json(await backupPolicy.mutate(req.body)));
+  app.get("/api/neptune/policy/runs", auth.requireAdmin, async (_req, res) => res.json(await backupPolicy.runs()));
+  app.post("/api/neptune/policy/runs", auth.requireMutation, async (req, res) => res.status(202).json(await backupPolicy.runs("POST", req.body)));
+
   app.post("/api/internal/neptune/backup", async (req, res, next) => {
     try {
       if (!config.neptuneExportTokenFile || !fs.existsSync(config.neptuneExportTokenFile)
         || !safeCompare(req.get("Authorization"), `Bearer ${fs.readFileSync(config.neptuneExportTokenFile, "utf8").trim()}`)) {
         return res.status(401).json({ error: "Unauthorized" });
       }
+      backupPolicy.assertExportReady();
       return archiveOperation(async (_req, res) => {
       const archive = await createBackup(store, config.version);
       const checksum = crypto.createHash("sha256").update(archive).digest("hex");
@@ -711,13 +745,13 @@ export async function createLaboratoryApp(overrides = {}) {
     try { res.json(await neptune.status()); } catch (error) { next(error); }
   });
 
-  app.put("/api/neptune/schedule", auth.requireMutation, (_req, res) => res.status(409).json({ error: "Backup schedules are owned by Saturn → Synchronization" }));
-  app.post("/api/neptune/runs", auth.requireMutation, (_req, res) => res.status(409).json({ error: "Remote backup runs are owned by Saturn → Synchronization" }));
+  app.put("/api/neptune/schedule", auth.requireMutation, (_req, res) => res.status(426).json({ error: "Use the versioned service backup policy" }));
+  app.post("/api/neptune/runs", auth.requireMutation, (_req, res) => res.status(426).json({ error: "Use the versioned service backup run endpoint" }));
   app.post("/api/neptune/initialize", auth.requireMutation, async (req, res, next) => {
     try {
       const code = String(req.body?.enrollment_code || "");
       if (!/^[A-Za-z0-9_-]{32}$/.test(code)) return res.status(400).json({ error: "Enter the 32-character Saturn setup code" });
-      res.status(202).json(await updater.initializeNeptune(code, "http://127.0.0.1:" + config.port + "/api/internal/neptune/backup"));
+      res.status(202).json(await updater.initializeNeptune(code, "http://127.0.0.1:" + config.port + "/api/internal/neptune/backup", req.body?.request_id));
     } catch (error) { next(error); }
   });
   app.post("/api/updates/agent/install", auth.requireMutation, async (_req, res, next) => {
@@ -744,7 +778,11 @@ export async function createLaboratoryApp(overrides = {}) {
   });
 
   app.get("/api/admin/audit", auth.requireAdmin, async (req, res, next) => {
-    try { res.json({ events: await audit.list(Number.parseInt(req.query.limit, 10) || 200) }); }
+    try {
+      const before = req.query.before_id;
+      if (before !== undefined && (typeof before !== "string" || !/^[0-9a-f]{64}$/.test(before))) return res.status(400).json({ error: "Invalid log cursor" });
+      res.json({ events: await audit.list(Number.parseInt(req.query.limit, 10) || 200, before ?? null) });
+    }
     catch (error) { next(error); }
   });
 
@@ -775,7 +813,7 @@ export async function createLaboratoryApp(overrides = {}) {
     catch (error) { next(error); }
   });
 
-  mountUpdateFlow(app, { prefix: "/api/update-flow", service: "laboratory", authorize: auth.requireAdmin, mutation: [auth.requireMutation],
+  mountUpdateFlow(app, { prefix: "/api/update-flow", service: "laboratory", helpers: ["updater", "neptune", "wyvern"], authorize: auth.requireAdmin, mutation: [auth.requireMutation],
     headId: config.updaterHeadId, token: () => config.updaterControlToken,
     client: { status: () => updater.status(), request: (method, route, body) => updater.request(method, route, body, true, 90_000) },
     backupGuard: archiveOperation,
@@ -799,7 +837,7 @@ export async function createLaboratoryApp(overrides = {}) {
     }
     return archiveOperation(async (req, res) => {
       try {
-        res.json({ restored: await restoreFromBuffer(req.file?.buffer, false) });
+        res.json({ restored: await restoreFromBuffer(req.file?.buffer) });
       } catch (restoreError) { next(restoreError); }
     }, backupUpload.single("file"))(req, res, next);
   });

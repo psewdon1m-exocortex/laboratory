@@ -20,6 +20,7 @@ function call(config, method, route, body = null, timeout = 30_000) {
     }, (response) => {
       const chunks = [];
       let size = 0;
+      response.on("error", reject);
       response.on("data", (chunk) => {
         size += chunk.length;
         if (size > 1024 * 1024) request.destroy(new Error("Neptune response exceeds 1 MB"));
@@ -30,7 +31,7 @@ function call(config, method, route, body = null, timeout = 30_000) {
         try { value = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); }
         catch { reject(Object.assign(new Error("Neptune returned invalid JSON"), { status: 502 })); return; }
         if (response.statusCode < 200 || response.statusCode >= 300) {
-          reject(Object.assign(new Error(value.error || `Neptune returned HTTP ${response.statusCode}`), { status: response.statusCode === 409 ? 409 : 502 }));
+          reject(Object.assign(new Error(value.error || `Neptune returned HTTP ${response.statusCode}`), { status: [400, 404, 409, 410, 413, 422, 426, 503].includes(response.statusCode) ? response.statusCode : 502, upstreamStatus: response.statusCode }));
         } else resolve(value);
       });
     });
@@ -44,7 +45,22 @@ function call(config, method, route, body = null, timeout = 30_000) {
 }
 
 export function createNeptuneClient(config) {
+  let lastKnown;
   return {
+    policy: (method = "GET", body, suffix = "") => {
+      if (!["GET", "PUT", "POST"].includes(method) || !["", "/runs"].includes(suffix)) throw new Error("Unsupported backup policy operation");
+      return call(config, method, "/policy" + suffix, body);
+    },
+    async availability() {
+      try {
+        const status = await call(config, "GET", "/status");
+        lastKnown = { ...status, installed: true, linked: true, state: "linked", last_verified_at: new Date().toISOString() };
+        return lastKnown;
+      } catch (error) {
+        const state = error.upstreamStatus === 404 ? "unlinked" : [401, 403].includes(error.upstreamStatus) ? "authorization_failed" : "unavailable";
+        return { installed: null, linked: null, ...lastKnown, state, ...(state === "unlinked" ? { installed: true, linked: false } : {}), error: error.message };
+      }
+    },
     status: () => call(config, "GET", "/status"),
     schedule: (enabled, intervalHours) => call(config, "PUT", "/schedule", { enabled, intervalHours }),
     run: () => call(config, "POST", "/runs"),

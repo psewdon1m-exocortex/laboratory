@@ -1,3 +1,7 @@
+import { mountWyvernConnection } from "./wyvern-connection.js";
+import { openAgentInitialization } from "./agent-initialize.js";
+import { mountBackupPolicy } from "./backup-policy.js";
+import { mountServiceLogs } from "./service-logs.js";
 import { openUpdateOverlay } from "./update-overlay.js";
 import { api, bindThemeControls, formatPublicationDate } from "./shared.js";
 
@@ -10,8 +14,6 @@ const uploadGrid = document.querySelector("[data-upload-grid]");
 const articlesRoot = document.querySelector("[data-admin-articles]");
 const runtimeRoot = document.querySelector("[data-runtime]");
 const neptuneRuntime = document.querySelector("[data-neptune-runtime]");
-const neptuneEnabled = document.querySelector("[data-neptune-enabled]");
-const neptuneInterval = document.querySelector("[data-neptune-interval]");
 const neptuneResult = document.querySelector("[data-neptune-result]");
 const toast = document.querySelector("[data-toast]");
 const importForm = document.querySelector("[data-article-import-form]");
@@ -163,7 +165,16 @@ function mutation(path, options = {}) {
   return api(path, { ...options, headers: { "X-CSRF-Token": csrfToken, ...(options.headers || {}) } });
 }
 
+let stopSettingsWidgets;
 function setAuthenticated(authenticated) {
+  stopSettingsWidgets?.(); stopSettingsWidgets = null;
+  if (authenticated) {
+    const policy = mountBackupPolicy(document.querySelector("[data-backup-policy]"), { service: "laboratory", base: "/api/neptune/policy", headers: () => ({ "X-CSRF-Token": csrfToken }) });
+    const logs = mountServiceLogs(document.querySelector("[data-service-logs]"), { base: "/api/admin/audit", download: "/api/admin/audit/export" });
+    const timer = setInterval(() => void loadNeptune(), 15000);
+    stopSettingsWidgets = () => { policy(); logs(); clearInterval(timer); };
+  }
+  if (!authenticated) { wyvernWidget?.close(); wyvernWidget = null; }
   loginCard.hidden = authenticated;
   protectedRoot.hidden = !authenticated;
 }
@@ -408,13 +419,14 @@ function runtimeItemInto(root, name, value) {
 
 async function loadNeptune() {
   try {
-    neptuneStatus = await api("/api/neptune/status");
-    renderNeptune(neptuneStatus);
-  } catch (error) {
-    neptuneStatus = null;
-    neptuneRuntime.replaceChildren();
-    neptuneResult.textContent = error.message;
-  }
+    const availability = await api("/api/neptune/availability");
+    document.querySelector("[data-neptune-version]").textContent = availability.version || neptuneStatus?.version || "Unavailable";
+    if (availability.state === "linked") { neptuneStatus = availability; renderNeptune(availability); }
+    else {
+      if (neptuneStatus) renderNeptune(neptuneStatus);
+      neptuneResult.textContent = availability.state === "authorization_failed" ? "Authorization failed." : availability.state === "unlinked" ? "The project is not enrolled." : "Neptune is unavailable. Last verified state is retained.";
+    }
+  } catch (error) { neptuneResult.textContent = error.message; }
 }
 
 async function loadState() {
@@ -441,33 +453,17 @@ async function loadAiSettings() {
   document.querySelector("[data-ai-model]").textContent = `Provider: ${settings.provider} · Model: ${settings.model}`;
 }
 
+let wyvernWidget;
 async function loadWyvernSettings() {
-  const box = document.querySelector('[data-wyvern-settings]');
-  const status = await api('/api/admin/wyvern');
-  box.replaceChildren();
-  const info = document.createElement('p'); info.textContent = status.llm_ready ? 'Connected · '+status.mode+' · ready' : status.reachable ? 'Connected · select an Adapter' : 'Wyvern is unavailable or not connected'; box.append(info);
-  const details = document.createElement('dl');
-  const observed = value => value === true ? 'Yes' : value === false ? 'No' : 'Unknown';
-  for (const [label, value] of [['Instance',status.instance_id||'Unknown'],['Client',status.client_id||'Unknown'],['Transport',status.mode||'Unknown'],['Link configured',observed(status.link_configured)],['Gateway reachable',observed(status.reachable)],['Client authenticated',observed(status.client_linked)],['Gateway ready',observed(status.ready)],['Adapter selected',observed(status.adapter_selected)]]) {
-    const term=document.createElement('dt'), description=document.createElement('dd');term.textContent=label;description.textContent=value;details.append(term,description);
-  }
-  box.append(details);
-  const select = document.createElement('select'); select.setAttribute('aria-label','Adapter for article derivatives'); select.add(new Option('Not selected',''));
-  const fn = status.functions?.derivatives;
-  for (const a of status.adapters || []) for (const [profile,p] of Object.entries(a.profiles)) {
-    if (a.enabled && (fn?.required_capabilities || ['text','structured_output','pdf']).every(c=>p.capabilities.includes(c))) {
-      const option = new Option(a.name+' / '+profile,a.adapter_id+':'+profile); option.selected = fn?.adapter_id===a.adapter_id && fn?.profile===profile; select.add(option);
-    }
-  }
-  if (fn?.adapter_id && !Array.from(select.options).some(option=>option.value===fn.adapter_id+':'+fn.profile)) {
-    const retained=new Option(fn.adapter_id+' / '+fn.profile+' (unavailable)',fn.adapter_id+':'+fn.profile);retained.selected=true;select.add(retained);
-  }
-  const apply = document.createElement('button'); apply.textContent='Apply Adapter'; apply.disabled=!status.reachable;
-  apply.onclick=async()=>{apply.disabled=true;try{const [adapter_id,profile]=select.value.split(':');await mutation('/api/admin/wyvern/bindings',{method:'POST',body:JSON.stringify({bindings:select.value?{derivatives:{adapter_id,profile}}:{},expected_revision:status.binding_revision,request_id:crypto.randomUUID()})});await loadWyvernSettings();showToast('Adapter binding saved');}catch(error){showToast(error.message);apply.disabled=false;}};
-  const connect=document.createElement('button');connect.textContent='Connect through Updater';connect.onclick=async()=>{connect.disabled=true;try{const job=await mutation('/api/admin/wyvern/connect',{method:'POST',body:'{}'});showToast('Connection accepted: '+job.id);await loadWyvernSettings();}catch(error){showToast(error.message);connect.disabled=false;}};
-  const refresh=document.createElement('button');refresh.textContent='Refresh status';refresh.onclick=()=>loadWyvernSettings().catch(error=>showToast(error.message));
-  const help=document.createElement('p');help.textContent='Create Adapters and manage API keys in the host console: sudo updater tui.';
-  box.append(select,apply,connect,refresh,help);
+  if (!wyvernWidget) wyvernWidget = mountWyvernConnection(document.querySelector('[data-wyvern-settings]'), {
+    service: 'laboratory', theme: 'laboratory',
+    status: () => api('/api/admin/wyvern'),
+    bind: body => mutation('/api/admin/wyvern/bindings', {method: 'POST', body: JSON.stringify(body)}),
+    initialize: () => initializeAgent('Wyvern'),
+    management: () => api('/api/admin/wyvern/management'),
+    update: () => openUpdates('wyvern'),
+  });
+  await wyvernWidget.refresh();
 }
 
 loginForm.addEventListener("submit", async (event) => {
@@ -747,11 +743,32 @@ async function waitJob(started, output) {
   }
   throw new Error("Operation still running. Check status before retrying.");
 }
-document.querySelector("[data-neptune-initialize]").addEventListener("submit", async (event) => {
-  event.preventDefault(); const form = event.currentTarget, button = form.querySelector("button"); button.disabled = true;
-  try { const job = await mutation("/api/neptune/initialize", { method: "POST", body: JSON.stringify(Object.fromEntries(new FormData(form))) }); form.reset(); await waitJob(job, neptuneResult); await loadNeptune(); }
-  catch (error) { neptuneResult.textContent = error.message; } finally { button.disabled = false; }
-});
+function initializeAgent(component) {
+  return openAgentInitialization({
+    component, service: "laboratory", theme: "laboratory",
+    description: "Initialize this service connection through the local Updater. An existing shared agent is reused.",
+    ...(component === "Neptune" ? { codeLabel: "One-time setup code", profile: "Required pipeline: recovery ZIP archive." } : { profile: "Connect the client; select an Adapter separately. No model request is sent during initialization." }),
+    initialize: input => mutation(component === "Neptune" ? "/api/neptune/initialize" : "/api/admin/wyvern/connect", { method: "POST", body: JSON.stringify(input) }),
+    observe: id => api("/api/updates/jobs/" + encodeURIComponent(id || "")),
+    recover: async hint => {
+      if (hint?.id) return api("/api/updates/jobs/" + encodeURIComponent(hint.id));
+      const { jobs } = await api("/api/update-flow/jobs");
+      return jobs.find(job => (component === "Neptune" ? job.service === "neptune-initialization" : job.service === "wyvern-installation") &&
+        (hint?.request_id ? job.request_id === hint.request_id : !["COMPLETED", "FAILED"].includes(job.state)));
+    },
+    verify: async () => {
+      if (component === "Neptune") {
+        const availability = await api("/api/neptune/availability");
+    document.querySelector("[data-neptune-version]").textContent = availability.version || neptuneStatus?.version || "Unavailable";
+        return { ready: availability.state === "linked" && availability.linked === true, message: "The scoped archive connection is not verified." };
+      }
+      const status = await api("/api/admin/wyvern");
+      return { ready: status.reachable === true && status.client_linked === true, message: "The gateway has not confirmed this client registration." };
+    },
+    onComplete: () => component === "Neptune" ? loadNeptune() : loadWyvernSettings(),
+  });
+}
+document.querySelector("[data-neptune-initialize]").addEventListener("click", () => initializeAgent("Neptune"));
 for (const [selector, route] of [["[data-access-key-form]", "/api/admin/security/access-key"], ["[data-kernel-form]", "/api/admin/security/kernel"]]) {
   document.querySelector(selector).addEventListener("submit", async (event) => {
     event.preventDefault(); const form = event.currentTarget, button = form.querySelector("button"); button.disabled = true;

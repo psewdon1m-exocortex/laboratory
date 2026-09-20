@@ -11,7 +11,7 @@ export async function api(path, options = {}) {
   });
   const type = response.headers.get("content-type") || "";
   const value = type.includes("application/json") ? await response.json() : await response.text();
-  if (!response.ok) throw new Error(value?.error || value || `Request failed with HTTP ${response.status}`);
+    if (!response.ok) throw Object.assign(new Error(typeof value?.error === "string" ? value.error : value?.error?.message || value?.message || (typeof value === "string" ? value : `Request failed with HTTP ${response.status}`)), { status: response.status });
   return value;
 }
 
