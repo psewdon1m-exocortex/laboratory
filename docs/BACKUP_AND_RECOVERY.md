@@ -33,6 +33,10 @@ membership, byte sizes and hashes are verified before any mutation.
 
 ## Restore transaction
 
+The private Settings page opens a themed restore overlay before invoking the file picker. Selecting a ZIP calls `POST /api/admin/restore/inspect` with the same session and CSRF protection as restore. Inspection applies the complete archive validation above and returns only manifest metadata, byte size and SHA-256 with `Cache-Control: private, no-store`; it does not restore state or retain the submitted archive.
+
+The operator reviews these details and explicitly confirms replacement. The subsequent multipart `POST /api/admin/restore` includes `X-Backup-SHA256` from inspection; a mismatch is rejected before mutation. The server still validates the archive on restore. Older clients may omit this header. While either request is pending, the overlay shows an indeterminate progress track; it reports completion only after the server acknowledges restoration. Dismissing the completed overlay returns to sign-in because restoration revokes the previous sessions. A failed request preserves the selected file and displays its error for review.
+
 Every restore first writes a mode `0600` pre-restore checkpoint under `data/restore-points` (three retained). Files are built in a new staging tree. Laboratory then opens an immediate SQLite transaction, atomically swaps the upload tree, replaces database state, runs foreign-key checks and commits. Any failure rolls back SQLite and restores the previous file tree. Requests receive `503 Retry-After` while the write barrier is active; in-flight workers discard stale results by restore epoch.
 
 ## Drill procedure

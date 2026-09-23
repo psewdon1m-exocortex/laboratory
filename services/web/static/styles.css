@@ -2294,3 +2294,15 @@ dialog.exo-initialize.laboratory > header h2 { font-family: inherit; line-height
 [data-admin-protected] .exo-wyvern-connection { --success: var(--positive, #385943); --danger: var(--negative, #a32626); }
 :root[data-theme="dark"] [data-admin-protected] { --positive: #99bda3; --negative: #ef9991; }
 .neptune-version-group { margin-top: 2.75rem; }
+
+[data-admin-protected] :is(.exo-service-logs,.exo-backup-policy,.exo-wyvern-connection) { --exo-inner:var(--line); --exo-secondary:var(--muted); --exo-hover:color-mix(in srgb,var(--fg) 8%,var(--surface)); --log-background:var(--surface); --success:var(--positive,#385943); --danger:var(--negative,#a32626); font-family:inherit; }
+:root[data-theme="dark"] dialog.exo-update.laboratory { --negative:#ef9991; }
+
+.laboratory-update-groups { display:grid; gap:44px; }
+.laboratory-update-groups h3 { margin:0 0 8px; }
+.laboratory-update-groups .exo-agent-status + .exo-agent-status { margin-top:12px; }
+.laboratory-update-groups button { margin-top:20px; }
+[data-update-version] { color:var(--accent); }
+
+:root [data-admin-protected] { --exo-inner:var(--line); --exo-secondary:var(--muted); --success:var(--positive,#385943); --danger:var(--negative,#a32626); }
+:root [data-admin-protected] :is(.exo-service-logs,.exo-backup-policy,.exo-wyvern-connection), :root [data-admin-protected] .exo-agent-group > h3 { font-family:inherit; }

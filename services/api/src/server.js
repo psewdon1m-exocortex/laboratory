@@ -796,8 +796,23 @@ export async function createLaboratoryApp(overrides = {}) {
     } catch (error) { next(error); }
   }));
 
+  app.post("/api/admin/restore/inspect", auth.requireMutation, archiveOperation(async (req, res, next) => {
+    try {
+      const parsed = await parseBackupAsync(req.file?.buffer);
+      res.setHeader("Cache-Control", "private, no-store");
+      res.json({ schema: parsed.manifest.schema, component: "laboratory", version: parsed.manifest.version,
+        createdAt: parsed.manifest.createdAt, sizeBytes: req.file.buffer.length,
+        sha256: crypto.createHash("sha256").update(req.file.buffer).digest("hex") });
+    } catch (error) { next(error); }
+  }, backupUpload.single("file")));
+
   app.post("/api/admin/restore", auth.requireMutation, archiveOperation(async (req, res, next) => {
       try {
+        const expected = req.get("X-Backup-SHA256");
+        if (expected && (!/^[a-f0-9]{64}$/.test(expected) || !req.file?.buffer
+          || crypto.createHash("sha256").update(req.file.buffer).digest("hex") !== expected)) {
+          return res.status(400).json({ error: "The archive does not match the inspected snapshot" });
+        }
         const restored = await restoreFromBuffer(req.file?.buffer);
         clearSessionCookie(res, config);
         res.json({ restored, reauthenticate: true });

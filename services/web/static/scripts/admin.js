@@ -1,3 +1,4 @@
+import { openRestoreOverlay } from "./restore-overlay.js";
 import { mountWyvernConnection } from "./wyvern-connection.js";
 import { openAgentInitialization } from "./agent-initialize.js";
 import { mountBackupPolicy } from "./backup-policy.js";
@@ -394,6 +395,12 @@ function renderRuntime(runtime) {
   runtimeItem("Last article sync", runtime.contentLibrary?.lastSyncAt || runtime.contentLibrary?.lastError);
   runtimeItem("Public URL", runtime.publicUrl);
   document.querySelector("[data-update-version]").textContent = runtime.version || "Unknown";
+  const registry = document.querySelector("[data-update-registry]");
+  registry.textContent = runtime.registerError ? "Service Unavailable" : runtime.registerRevision ? "Service Reachability" : "Not verified";
+  registry.closest(".exo-agent-status").dataset.state = runtime.registerError ? "unavailable" : runtime.registerRevision ? "ready" : "unknown";
+  const helper = document.querySelector("[data-update-helper]");
+  helper.textContent = runtime.updater?.available ? "Service Reachability" : "Service Unavailable";
+  helper.closest(".exo-agent-status").dataset.state = runtime.updater?.available ? "ready" : "unavailable";
   document.querySelector("[data-updater-status]").textContent = runtime.updater?.available
     ? `${runtime.updater.status} / ${runtime.updater.version}`
     : "Not connected";
@@ -659,28 +666,8 @@ document.querySelector("[data-logout]").addEventListener("click", async () => {
   setAuthenticated(false);
 });
 
-document.querySelector("[data-restore-input]").addEventListener("change", async (event) => {
-  const file = event.currentTarget.files?.[0];
-  if (!file) return;
-  const accepted = await confirmAction({
-    title: "Restore backup?",
-    message: "Current Laboratory content will be replaced with the selected backup.",
-    confirmLabel: "Restore backup",
-    danger: true,
-  });
-  if (!accepted) {
-    event.currentTarget.value = "";
-    return;
-  }
-  const body = new FormData();
-  body.append("file", file);
-  try {
-    await mutation("/api/admin/restore", { method: "POST", body });
-    window.location.assign("/private"); return;
-    await loadState();
-    showToast("Backup restored");
-  } catch (error) { showToast(error.message); }
-  event.currentTarget.value = "";
+document.querySelector("[data-restore-open]").addEventListener("click", () => {
+  openRestoreOverlay({ request: mutation, onComplete: () => window.location.assign("/private") });
 });
 
 function openUpdates(component = "laboratory") {

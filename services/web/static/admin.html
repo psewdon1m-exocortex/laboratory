@@ -98,7 +98,7 @@
           <div class="section-heading"><h2>Backup</h2><p>Manual recovery archives and automatic Neptune delivery to Saturn use the same ZIP bytes.</p></div>
           <div class="system-actions">
             <a class="button-link" href="/api/admin/backup" data-backup-download>Download backup</a>
-            <label class="button-file">Restore backup<input type="file" accept="application/zip,.zip" data-restore-input /></label>
+            <button type="button" data-restore-open>Restore backup</button>
           </div>
           <dl class="runtime-grid" data-neptune-runtime></dl>
           <div class="neptune-controls">
@@ -157,13 +157,16 @@
 
         <section class="admin-card section-card">
           <div class="section-heading"><h2>Updates</h2><p>Laboratory release and local Updater binding.</p></div>
-          <dl class="runtime-grid update-runtime">
-            <dt>Current version</dt><dd data-update-version></dd>
-            <dt>Updater</dt><dd data-updater-status></dd>
-          </dl>
-          <div class="system-actions">
-            <button type="button" data-update-check>Check for updates</button>
-            <button type="button" data-updater-self>Check Updater for updates</button>
+          <div class="laboratory-update-groups">
+            <div><h3>Update pipeline</h3><p>Release discovery comes from Kernel Register. The local Updater verifies and installs the selected release.</p>
+              <p>Current installed version: <strong data-update-version></strong></p>
+              <div class="exo-agent-status" data-state="unknown"><span>Local Updater agent:</span><strong><span data-update-helper>Checking…</span><i aria-hidden="true"></i></strong></div>
+              <div class="exo-agent-status" data-state="unknown"><span>Kernel Register:</span><strong><span data-update-registry>Checking…</span><i aria-hidden="true"></i></strong></div>
+              <button type="button" data-update-check>Check for updates</button>
+            </div>
+            <div><h3>Updater version</h3><p>Current installed version: <span data-updater-status>Checking…</span></p>
+              <button type="button" data-updater-self>Check Updater for updates</button>
+            </div>
           </div>
           <p class="admin-note" data-updater-result></p>
         </section>

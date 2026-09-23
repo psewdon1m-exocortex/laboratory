@@ -1,6 +1,8 @@
+import { bindActionGeometry } from "./ui-interactions.js";
 import { confirmAgentAction } from "./agent-initialize.js";
 function node(tag, text) { const item = document.createElement(tag); if (text !== undefined) item.textContent = String(text); return item; }
 export function mountWyvernConnection(root, options) {
+  const stopGeometry = bindActionGeometry(root);
   let status, failure = "", closed = false, loading = false, dirty = false, saving = false, draftRevision;
   const drafts = new Map();
   const key = "exocortex.wyvern-binding.v1." + options.service;
@@ -24,7 +26,7 @@ export function mountWyvernConnection(root, options) {
     const error = node("p", failure || status?.code || ""); error.className = "exo-agent-error"; error.setAttribute("role", "alert"); identity.append(error);
     const connection = group("Client connection");
     connection.append(node("p", "Client: " + (status?.client_id || options.service) + " · Authenticated: " + truth(status?.client_linked)),
-      button("Initialize", options.initialize), button("Retry status", refresh));
+      ...(status?.client_linked && status?.ready ? [] : [button("Initialize", options.initialize)]), button("Retry status", refresh));
     const adapters = group("Allowed Adapter");
     adapters.append(node("p", status?.llm_ready ? "Required functions are ready." : "Select a permitted Adapter and verify every required function."));
     for (const [name, fn] of Object.entries(status?.functions || {})) {
@@ -88,5 +90,5 @@ export function mountWyvernConnection(root, options) {
   }
   render(); void refresh();
   const timer = setInterval(() => { if (!document.hidden) void refresh(); }, 15000);
-  return { refresh, close() { closed = true; clearInterval(timer); root.replaceChildren(); } };
+  return { refresh, close() { closed = true; stopGeometry(); clearInterval(timer); root.replaceChildren(); } };
 }
