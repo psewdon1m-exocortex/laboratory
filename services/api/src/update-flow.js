@@ -46,7 +46,7 @@ export function mountUpdateFlow(app, { prefix, service, helpers = ["updater", "n
     } else {
       if (!helpers.includes(component) || !stable(req.body?.version) || !/^[0-9a-f-]{36}$/i.test(req.body?.request_id ?? "")) throw fail("An exact stable component version and request ID are required");
       if (component === "wyvern" && req.body.confirm_shared !== true) throw fail("Confirm the impact on all clients of this shared gateway");
-      job = await client.request("POST", `/v2/components/${component}/updates`, { head_id: headId, version: req.body.version, request_id: req.body.request_id, ...(component === "wyvern" ? { confirm_shared: true } : {}) });
+      job = await client.request("POST", `/v2/components/${component}/updates`, { head_id: headId, version: req.body.version, request_id: req.body.request_id });
     }
     onJob?.(job); res.status(202).json(job);
   }));

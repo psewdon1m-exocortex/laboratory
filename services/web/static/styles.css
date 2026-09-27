@@ -2306,3 +2306,19 @@ dialog.exo-initialize.laboratory > header h2 { font-family: inherit; line-height
 
 :root [data-admin-protected] { --exo-inner:var(--line); --exo-secondary:var(--muted); --success:var(--positive,#385943); --danger:var(--negative,#a32626); }
 :root [data-admin-protected] :is(.exo-service-logs,.exo-backup-policy,.exo-wyvern-connection), :root [data-admin-protected] .exo-agent-group > h3 { font-family:inherit; }
+
+/* Wyvern uses Laboratory's original editorial surface and semantic colors. */
+[data-admin-protected] .exo-wyvern-connection .exo-wyvern-binding > h3 { font-family:inherit; }
+[data-admin-protected] .exo-wyvern-connection .exo-wyvern-active { color:var(--fg); }
+[data-admin-protected] .exo-wyvern-connection .exo-wyvern-guidance { color:var(--muted); }
+:root dialog.exo-wyvern-choice.laboratory { --wyvern-bg:var(--surface); --wyvern-fg:var(--fg); --wyvern-line:var(--line); --wyvern-muted:var(--muted); --wyvern-danger:var(--negative,#a32626); border-color:var(--line); background:var(--surface); box-shadow:var(--shadow); font-family:"Space Grotesk",Arial,sans-serif; }
+:root dialog.exo-wyvern-choice.laboratory::backdrop { background:color-mix(in srgb,var(--bg) 48%,transparent); backdrop-filter:blur(9px); }
+:root dialog.exo-wyvern-choice.laboratory .exo-wyvern-choice-header { border-color:var(--line-soft); }
+:root dialog.exo-wyvern-choice.laboratory .exo-wyvern-choice-header h2 { font-size:1.35rem; line-height:1.2; font-weight:500; letter-spacing:-.025em; }
+:root dialog.exo-wyvern-choice.laboratory .exo-wyvern-choice-header button { font-family:inherit; }
+:root dialog.exo-wyvern-choice.laboratory .exo-wyvern-choice-row { border-color:var(--line); }
+:root dialog.exo-wyvern-choice.laboratory .exo-wyvern-choice-row.is-selected { border-color:var(--accent); }
+:root dialog.exo-wyvern-choice.laboratory .exo-wyvern-choice-details { border-color:var(--line-soft); }
+:root dialog.exo-wyvern-choice.laboratory .exo-wyvern-choice-mark { border-color:var(--line); }
+:root dialog.exo-wyvern-choice.laboratory .exo-wyvern-choice-row.is-selected .exo-wyvern-choice-mark { border-color:var(--accent); background:var(--accent); box-shadow:inset 0 0 0 4px var(--surface); }
+:root dialog.exo-wyvern-choice.laboratory .exo-wyvern-unlink { border-color:var(--negative,#a32626); color:var(--negative,#a32626); }

@@ -1,6 +1,6 @@
 # Settings compatibility and release qualification
 
-Backup, Updates, Wyverne Connection and Logs keep Laboratory's visual theme while sharing the service-agent behavior: masked Initialize overlay, durable job observation, explicit binding confirmation, scoped helper updates, independent application-owned backup policy, and complete cursor-based log history.
+Backup, Updates, Wyverne Connection and Logs keep Laboratory's visual theme. Wyvern installation, Adapter administration and shared release checks/updates use `sudo updater tui`; the Settings card only selects a permitted Adapter for Laboratory's functions. Its existing Initialize and version controls display TUI guidance without starting a host operation. Neptune keeps its scoped Initialize workflow, and Laboratory keeps its own update and backup flows.
 
 The installed helper version and a reachable socket are not enough to prove compatibility. Release construction must verify the signed Updater bundle's Wyvern capability and `release-trust/wyvern.pem`, the signed Wyvern manifest, and the tested Kernel/Volt publication and scoped-resolution contracts. The historical Updater 0.5.0 pin is not a claim that its published bundle includes these later capabilities. Replace `.release/updater.version` and its archive SHA-256 together only after the new signed bundle is published and qualified. Do not invent a digest or replace an existing release asset.
 

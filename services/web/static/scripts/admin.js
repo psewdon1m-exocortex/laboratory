@@ -466,9 +466,6 @@ async function loadWyvernSettings() {
     service: 'laboratory', theme: 'laboratory',
     status: () => api('/api/admin/wyvern'),
     bind: body => mutation('/api/admin/wyvern/bindings', {method: 'POST', body: JSON.stringify(body)}),
-    initialize: () => initializeAgent('Wyvern'),
-    management: () => api('/api/admin/wyvern/management'),
-    update: () => openUpdates('wyvern'),
   });
   await wyvernWidget.refresh();
 }
@@ -730,32 +727,28 @@ async function waitJob(started, output) {
   }
   throw new Error("Operation still running. Check status before retrying.");
 }
-function initializeAgent(component) {
+function initializeNeptune() {
   return openAgentInitialization({
-    component, service: "laboratory", theme: "laboratory",
+    component: "Neptune", service: "laboratory", theme: "laboratory",
     description: "Initialize this service connection through the local Updater. An existing shared agent is reused.",
-    ...(component === "Neptune" ? { codeLabel: "One-time setup code", profile: "Required pipeline: recovery ZIP archive." } : { profile: "Connect the client; select an Adapter separately. No model request is sent during initialization." }),
-    initialize: input => mutation(component === "Neptune" ? "/api/neptune/initialize" : "/api/admin/wyvern/connect", { method: "POST", body: JSON.stringify(input) }),
+    codeLabel: "One-time setup code", profile: "Required pipeline: recovery ZIP archive.",
+    initialize: input => mutation("/api/neptune/initialize", { method: "POST", body: JSON.stringify(input) }),
     observe: id => api("/api/updates/jobs/" + encodeURIComponent(id || "")),
     recover: async hint => {
       if (hint?.id) return api("/api/updates/jobs/" + encodeURIComponent(hint.id));
       const { jobs } = await api("/api/update-flow/jobs");
-      return jobs.find(job => (component === "Neptune" ? job.service === "neptune-initialization" : job.service === "wyvern-installation") &&
+      return jobs.find(job => job.service === "neptune-initialization" &&
         (hint?.request_id ? job.request_id === hint.request_id : !["COMPLETED", "FAILED"].includes(job.state)));
     },
     verify: async () => {
-      if (component === "Neptune") {
-        const availability = await api("/api/neptune/availability");
-    document.querySelector("[data-neptune-version]").textContent = availability.version || neptuneStatus?.version || "Unavailable";
-        return { ready: availability.state === "linked" && availability.linked === true, message: "The scoped archive connection is not verified." };
-      }
-      const status = await api("/api/admin/wyvern");
-      return { ready: status.reachable === true && status.client_linked === true, message: "The gateway has not confirmed this client registration." };
+      const availability = await api("/api/neptune/availability");
+      document.querySelector("[data-neptune-version]").textContent = availability.version || neptuneStatus?.version || "Unavailable";
+      return { ready: availability.state === "linked" && availability.linked === true, message: "The scoped archive connection is not verified." };
     },
-    onComplete: () => component === "Neptune" ? loadNeptune() : loadWyvernSettings(),
+    onComplete: () => loadNeptune(),
   });
 }
-document.querySelector("[data-neptune-initialize]").addEventListener("click", () => initializeAgent("Neptune"));
+document.querySelector("[data-neptune-initialize]").addEventListener("click", initializeNeptune);
 for (const [selector, route] of [["[data-access-key-form]", "/api/admin/security/access-key"], ["[data-kernel-form]", "/api/admin/security/kernel"]]) {
   document.querySelector(selector).addEventListener("submit", async (event) => {
     event.preventDefault(); const form = event.currentTarget, button = form.querySelector("button"); button.disabled = true;

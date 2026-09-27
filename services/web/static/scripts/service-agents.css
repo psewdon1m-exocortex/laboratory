@@ -34,6 +34,39 @@
 :root .exo-agent-status i { width:18px; height:18px; flex:0 0 18px; background:currentColor; }
 :root .exo-agent-status[data-state=ready] strong { color:var(--success,#62ff8c); }
 :root .exo-agent-status[data-state=unavailable] strong { color:var(--danger,#f83d3d); }
+:root .exo-wyvern-observations { display:grid; gap:16px; margin-top:28px; }
+:root .exo-wyvern-active { margin-top:30px !important; }
+:root .exo-wyvern-binding > .exo-wyvern-action { margin-top:8px; }
+:root .exo-wyvern-binding > .exo-wyvern-error { margin-top:14px; }
+:root .exo-wyvern-binding > .exo-wyvern-guidance { margin-top:12px; }
+:root .exo-wyvern-binding > :is(.exo-wyvern-error,.exo-wyvern-guidance) + .exo-wyvern-action { margin-top:35px; }
+:root dialog.exo-wyvern-choice { --wyvern-bg:#000; --wyvern-fg:#fff; --wyvern-line:#ccc; --wyvern-muted:#aaa; --wyvern-danger:#f83d3d; box-sizing:border-box; width:min(760px,calc(100vw - 32px)); min-height:min(710px,calc(100dvh - 32px)); max-height:calc(100dvh - 32px); padding:0; border:1px solid var(--wyvern-line); border-radius:0; background:var(--wyvern-bg); color:var(--wyvern-fg); font:14px/22px Consolas,"Liberation Mono",monospace; overflow:auto; }
+:root dialog.exo-wyvern-choice::backdrop { background:rgba(0,0,0,.7); }
+:root .exo-wyvern-choice-header { display:flex; align-items:center; justify-content:space-between; min-height:55px; padding:6px 8px 6px 20px; border-bottom:1px solid var(--wyvern-line); }
+:root .exo-wyvern-choice-header h2 { margin:0; color:var(--accent,#00a8ff); font-size:24px; line-height:29px; font-weight:700; }
+:root .exo-wyvern-choice-header button { width:40px; height:40px; border:1px solid var(--wyvern-line); border-radius:0; background:transparent; color:var(--wyvern-fg); font:24px/30px Consolas,"Liberation Mono",monospace; cursor:pointer; }
+:root .exo-wyvern-choice-body { display:flex; flex-direction:column; gap:0; min-height:calc(min(710px,100dvh - 32px) - 55px); padding:24px 20px 20px; box-sizing:border-box; }
+:root .exo-wyvern-choice-intro { margin:0 0 20px; color:var(--wyvern-muted); }
+:root .exo-wyvern-function-label { display:grid; gap:6px; max-width:340px; margin-bottom:20px; color:var(--wyvern-muted); }
+:root .exo-wyvern-function-label select { min-height:40px; padding:6px 10px; border:1px solid var(--wyvern-line); border-radius:0; background:var(--wyvern-bg); color:var(--wyvern-fg); font:inherit; }
+:root .exo-wyvern-choice-layout { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; flex:1; min-height:0; }
+:root .exo-wyvern-choice-list { display:grid; align-content:start; gap:22px; }
+:root .exo-wyvern-choice-list > p { margin:0; color:var(--wyvern-muted); }
+:root .exo-wyvern-choice-row { display:flex; align-items:center; gap:14px; width:100%; min-height:52px; padding:10px 15px; border:1px solid var(--wyvern-line); border-radius:0; text-align:left; color:var(--wyvern-fg); background:transparent; font:inherit; cursor:pointer; }
+:root .exo-wyvern-choice-row.is-selected { border-color:var(--accent,#00a8ff); color:var(--accent,#00a8ff); }
+:root .exo-wyvern-choice-row:disabled { opacity:.5; cursor:not-allowed; }
+:root .exo-wyvern-choice-mark { box-sizing:border-box; width:20px; height:20px; flex:0 0 20px; border:1px solid var(--wyvern-line); }
+:root .exo-wyvern-choice-row.is-selected .exo-wyvern-choice-mark { border:4px double var(--wyvern-fg); background:var(--wyvern-fg); box-shadow:inset 0 0 0 4px var(--wyvern-bg); }
+:root .exo-wyvern-choice-unavailable { margin-left:auto; color:var(--wyvern-danger); font-size:12px; }
+:root .exo-wyvern-choice-details { display:grid; align-content:start; gap:10px; min-height:460px; padding:14px 16px; border:1px solid var(--wyvern-line); overflow-wrap:anywhere; }
+:root .exo-wyvern-choice-details strong { margin-bottom:20px; }
+:root .exo-wyvern-choice-details[hidden] { display:none; }
+:root .exo-wyvern-choice-error { margin:12px 0 0; color:var(--wyvern-danger); }
+:root .exo-wyvern-choice-error:empty { display:none; }
+:root .exo-wyvern-unlink { width:100%; min-height:40px; margin-top:16px; border:1px solid var(--wyvern-danger); border-radius:0; color:var(--wyvern-danger); background:transparent; font:inherit; cursor:pointer; }
+:root .exo-wyvern-choice :is(button,select):focus-visible { outline:1px solid var(--accent,#00a8ff); outline-offset:3px; }
+:root .exo-wyvern-choice :is(button:not(:disabled)):hover { border-color:var(--accent,#00a8ff); color:var(--accent,#00a8ff); }
+@media(max-width:620px) { :root .exo-wyvern-choice-layout { grid-template-columns:minmax(0,1fr); } :root .exo-wyvern-choice-details { min-height:180px; } :root dialog.exo-wyvern-choice { min-height:0; } :root .exo-wyvern-choice-body { min-height:0; } }
 :root dialog.exo-initialize form { display:grid; gap:20px; }
 :root dialog.exo-initialize label { display:grid; gap:8px; font-weight:700; }
 :root dialog.exo-initialize input:not([type=checkbox]) { width:100%; min-height:40px; padding:8px 12px; font:inherit; color:inherit; background:transparent; border:1px solid var(--exo-inner,#ccc); }

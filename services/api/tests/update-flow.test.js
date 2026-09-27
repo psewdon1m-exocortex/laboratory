@@ -32,6 +32,10 @@ test("Laboratory update uses one standard ZIP, enforces session/CSRF/save receip
   const { csrfToken } = await login.json();
   assert.equal((await fetch(`${base}/api/update-flow/backup`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ version: "0.1.8" }) })).status, 403);
   const headers = { cookie, "content-type": "application/json", "X-CSRF-Token": csrfToken };
+  assert.equal((await fetch(`${base}/api/update-flow/check`, { method: "POST", headers, body: JSON.stringify({ component: "wyvern" }) })).status, 400);
+  assert.equal((await fetch(`${base}/api/update-flow/install/wyvern`, { method: "POST", headers, body: JSON.stringify({ version: "0.1.8", request_id: "01234567-0123-4123-8123-012345678901", confirm_shared: true }) })).status, 400);
+  assert.equal((await fetch(`${base}/api/admin/wyvern/connect`, { method: "POST", headers, body: JSON.stringify({ request_id: "01234567-0123-4123-8123-012345678901" }) })).status, 403);
+  assert.equal((await fetch(`${base}/api/admin/wyvern/management`, { headers })).status, 403);
   const downloaded = await fetch(`${base}/api/update-flow/backup`, { method: "POST", headers, body: JSON.stringify({ version: "0.1.8" }) });
   assert.equal(downloaded.status, 200);
   const archive = Buffer.from(await downloaded.arrayBuffer());

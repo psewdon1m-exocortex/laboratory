@@ -25,7 +25,7 @@ import { DerivedContentRuntime } from "./derived-content.js";
 import { intentFromStatus, saveIntent } from "./wyvern-intent.js";
 import { EvidenceIndex } from "./evidence-index.js";
 import { GitHubArticleLibrary } from "./github-library.js";
-import { KernelRegisterRuntime, resolveKernelValues } from "./kernel-register.js";
+import { KernelRegisterRuntime } from "./kernel-register.js";
 import { loadKernelConnection, saveKernelConnection } from "./kernel-connection.js";
 import { createBackupPolicy } from "./backup-policy.js";
 import { createNeptuneClient } from "./neptune-client.js";
@@ -552,14 +552,7 @@ export async function createLaboratoryApp(overrides = {}) {
 
   app.get("/api/admin/wyvern", auth.requireAdmin, async (_req, res) => res.json(await derivedContent.gateway.status()));
   app.get("/api/admin/wyvern/management", auth.requireAdmin, async (_req, res) => {
-    const key = "services.wyvern.management_url";
-    let record;
-    try { record = (await resolveKernelValues(config, [key]))[key]; }
-    catch { return res.status(503).json({ error: "An authorized gateway management destination is not available in Kernel." }); }
-    if (record?.secret !== false) return res.status(409).json({ error: "The management destination must be a public Register value." });
-    const url = new URL(record.value);
-    if (url.protocol !== "https:" || url.username || url.password) return res.status(409).json({ error: "Invalid gateway management destination." });
-    return res.json({ url: url.href });
+    return res.status(403).json({ error: "Manage Wyvern Adapters with sudo updater tui on the host." });
   });
   app.post("/api/admin/wyvern/bindings", auth.requireMutation, async (req, res, next) => {
     try {
@@ -569,12 +562,8 @@ export async function createLaboratoryApp(overrides = {}) {
       res.json(result);
     } catch (error) { next(error); }
   });
-  app.post("/api/admin/wyvern/connect", auth.requireMutation, async (req, res, next) => {
-    try {
-      if (Object.keys(req.body || {}).join(",") !== "request_id" || !/^[0-9a-f-]{36}$/i.test(req.body.request_id)) return res.status(400).json({ error: "Provide a stable initialization request ID. The service identity is derived on the server." });
-      res.status(202).json(await updater.request("POST", "/v1/lifecycle/wyvern-installation", { head_id: config.updaterHeadId, request_id: req.body.request_id }, true));
-    } catch (error) { next(error); }
-  });
+  app.post("/api/admin/wyvern/connect", auth.requireMutation, (_req, res) =>
+    res.status(403).json({ error: "Install and link Wyvern with sudo updater tui on the host." }));
   app.get("/api/admin/ai", auth.requireAdmin, async (_req, res) => {
     await derivedContent.gateway.status();
     res.json(derivedContent.settings());
@@ -828,7 +817,7 @@ export async function createLaboratoryApp(overrides = {}) {
     catch (error) { next(error); }
   });
 
-  mountUpdateFlow(app, { prefix: "/api/update-flow", service: "laboratory", helpers: ["updater", "neptune", "wyvern"], authorize: auth.requireAdmin, mutation: [auth.requireMutation],
+  mountUpdateFlow(app, { prefix: "/api/update-flow", service: "laboratory", helpers: ["updater", "neptune"], authorize: auth.requireAdmin, mutation: [auth.requireMutation],
     headId: config.updaterHeadId, token: () => config.updaterControlToken,
     client: { status: () => updater.status(), request: (method, route, body) => updater.request(method, route, body, true, 90_000) },
     backupGuard: archiveOperation,

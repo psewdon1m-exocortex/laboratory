@@ -1,94 +1,200 @@
-import { bindActionGeometry } from "./ui-interactions.js";
+import { bindActionGeometry, bindDialogInteraction } from "./ui-interactions.js";
 import { confirmAgentAction } from "./agent-initialize.js";
-function node(tag, text) { const item = document.createElement(tag); if (text !== undefined) item.textContent = String(text); return item; }
+
+function node(tag, text, className) {
+  const element = document.createElement(tag);
+  if (text !== undefined) element.textContent = String(text);
+  if (className) element.className = className;
+  return element;
+}
+
 export function mountWyvernConnection(root, options) {
   const stopGeometry = bindActionGeometry(root);
-  let status, failure = "", closed = false, loading = false, dirty = false, saving = false, draftRevision;
-  const drafts = new Map();
-  const key = "exocortex.wyvern-binding.v1." + options.service;
-  let pending; try { pending = JSON.parse(localStorage.getItem(key) || "null"); } catch {}
-  const remember = value => { pending = value; try { value ? localStorage.setItem(key, JSON.stringify(value)) : localStorage.removeItem(key); } catch {} };
-  const truth = value => value === true ? "Yes" : value === false ? "No" : "Unknown";
+  const storageKey = "exocortex.wyvern-binding.v1." + options.service;
+  let status, failure = "", closed = false, loading = false, saving = false, modal;
+  let pending;
+  try { pending = JSON.parse(localStorage.getItem(storageKey) || "null"); } catch { /* The server remains authoritative. */ }
+
+  function remember(value) {
+    pending = value;
+    try { value ? localStorage.setItem(storageKey, JSON.stringify(value)) : localStorage.removeItem(storageKey); } catch { /* Retry can still use this page's state. */ }
+  }
+
+  const functions = () => Object.entries(status?.functions || {});
+  const binding = name => status?.bindings?.[name] || status?.functions?.[name];
+  const bound = value => Boolean(value?.adapter_id && value?.profile);
+  const hasBinding = () => functions().some(([name]) => bound(binding(name)));
+  const adapterName = value => status?.adapters?.find(item => item.adapter_id === value?.adapter_id)?.name || value?.adapter_id || "unknown";
+  const statusRow = (label, ready, waiting = false) => {
+    const row = node("div", undefined, "exo-agent-status");
+    row.dataset.state = waiting ? "unknown" : ready ? "ready" : "unavailable";
+    const result = node("strong", waiting ? "Checking" : ready ? "Reachability" : "Unavailable");
+    const square = node("i"); square.setAttribute("aria-hidden", "true"); result.append(square);
+    row.append(node("span", label), result);
+    return row;
+  };
+
   function render() {
-    if (closed || root.contains(document.activeElement) && document.activeElement.matches("select")) return;
+    if (closed) return;
     root.replaceChildren(); root.classList.add("exo-wyvern-connection");
-    const group = title => { const box = node("section"); box.className = "exo-agent-group"; box.append(node("h3", title)); root.append(box); return box; };
-    const button = (label, action) => { const item = node("button", label); item.type = "button"; item.onclick = () => void action(); return item; };
-    const identity = group("Gateway");
-    identity.append(node("p", "Wyvern owns provider access. Applications use only their permitted Adapters."),
-      node("p", "Instance: " + (status?.instance_id || "Unknown") + " · Transport: " + (status?.mode || "Unknown")),
-      node("p", "Reachable: " + truth(status?.reachable) + " · Last verified: " + (status?.last_verified_at ? new Date(status.last_verified_at).toLocaleString() : "Not reported")));
-    const reachability = node("div"); reachability.className = "exo-agent-status";
-    reachability.dataset.state = status?.reachable === true ? "ready" : status?.reachable === false ? "unavailable" : "unknown";
-    const indicator = node("strong", status?.reachable === true ? "Service Reachability" : status?.reachable === false ? "Service Unavailable" : "Checking");
-    const square = node("i"); square.setAttribute("aria-hidden", "true"); indicator.append(square);
-    reachability.append(node("span", "Local Wyverne agent:"), indicator); identity.append(reachability);
-    const error = node("p", failure || status?.code || ""); error.className = "exo-agent-error"; error.setAttribute("role", "alert"); identity.append(error);
-    const connection = group("Client connection");
-    connection.append(node("p", "Client: " + (status?.client_id || options.service) + " · Authenticated: " + truth(status?.client_linked)),
-      ...(status?.client_linked && status?.ready ? [] : [button("Initialize", options.initialize)]), button("Retry status", refresh));
-    const adapters = group("Allowed Adapter");
-    adapters.append(node("p", status?.llm_ready ? "Required functions are ready." : "Select a permitted Adapter and verify every required function."));
-    for (const [name, fn] of Object.entries(status?.functions || {})) {
-      const bound = fn.adapter_id ? fn.adapter_id + ":" + fn.profile : "";
-      if (!dirty) drafts.set(name, bound);
-      const label = node("label", name), select = node("select"); select.setAttribute("aria-label", "Adapter for " + name);
-      select.add(new Option("Not linked", ""));
-      const required = fn.required_capabilities || [];
-      for (const adapter of status?.adapters || []) for (const [profile, data] of Object.entries(adapter.profiles || {})) {
-        if (adapter.enabled && required.every(capability => (data.capabilities || []).includes(capability)))
-          select.add(new Option(adapter.name + " / " + profile, adapter.adapter_id + ":" + profile));
-      }
-      const selected = drafts.get(name) ?? bound;
-      if (selected && !Array.from(select.options).some(option => option.value === selected)) {
-        const retained = new Option(selected + " · unavailable", selected); retained.disabled = true; select.add(retained);
-      }
-      select.value = selected; select.disabled = !status?.reachable || saving;
-      select.onchange = () => { if (!dirty) draftRevision = status.binding_revision; dirty = true; drafts.set(name, select.value); };
-      label.append(select); adapters.append(label, node("p", "Readiness: " + truth(fn.ready) + (fn.code ? " · " + fn.code : "")));
+    const group = node("section", undefined, "exo-agent-group exo-wyvern-binding");
+    group.append(node("h3", "Wyverne adapter binding"),
+      node("p", "Wyvern owns provider access. This service uses only its permitted Adapters."));
+    const observations = node("div", undefined, "exo-wyvern-observations");
+    observations.append(statusRow("Local Wyverne agent:", status?.reachable === true, !status && !failure),
+      statusRow("Active adapter status:", status?.llm_ready === true, !status && !failure));
+    group.append(observations);
+    const message = failure || (status?.reachable === false ? status.code || "Wyvern is unavailable." : "");
+    if (message) {
+      const error = node("p", message.replaceAll("_", " "), "exo-agent-error exo-wyvern-error");
+      error.setAttribute("role", "alert"); group.append(error);
     }
-    const apply = button("Apply Adapter binding", async () => {
-      const bindings = Object.fromEntries([...drafts].filter(([,value]) => value).map(([name,value]) => {
-        const [adapter_id, profile] = value.split(":"); return [name, { adapter_id, profile }];
-      }));
-      const expected = dirty ? draftRevision : status?.binding_revision;
-      const same = pending && JSON.stringify(pending.bindings) === JSON.stringify(bindings);
-      const request = same ? pending : { bindings, expected_revision: expected, request_id: crypto.randomUUID() };
-      const summary = [...drafts].map(([name, value]) => name + ": " + (value || "unlink")).join("; ");
-      if (!await confirmAgentAction({ title: "Change Adapter binding", message: "Apply these bindings only to this service: " + summary + ". In-flight work keeps its accepted configuration. Future requests use the selected Adapter.", confirmLabel: "Apply binding", theme: options.theme })) return;
-      remember(request); saving = true; render();
-      try {
-        await options.bind(request);
-        const verified = await options.status();
-        for (const [name, value] of drafts) {
-          const actual = verified.functions?.[name];
-          if ((actual?.adapter_id ? actual.adapter_id + ":" + actual.profile : "") !== value) throw new Error("The updated binding is not yet verified. Retry status before another change.");
-        }
-        status = verified; remember(null); dirty = false; failure = "";
-      } catch (error) { failure = error.message; if (error.status === 409) { remember(null); dirty = false; } }
-      finally { saving = false; render(); }
-    });
-    apply.disabled = !status?.reachable || saving || !Object.keys(status?.functions || {}).length; adapters.append(apply);
-    adapters.append(button("Open gateway management", async () => {
-      try {
-        const { url } = await options.management();
-        const destination = new URL(url);
-        if (destination.protocol !== "https:" || destination.username || destination.password) throw new Error("The authorized management destination is invalid");
-        location.assign(destination.href);
-      } catch (error) { failure = error.message; render(); }
-    }));
-    const version = group("Wyvern version");
-    version.append(node("p", "Current installed version: " + (status?.version || status?.gateway_version || "Unavailable")),
-      button("Check Wyvern for updates", options.update));
+    if (status?.link_configured === false) group.append(node("p", "Install and link Wyvern with sudo updater tui on the host.", "exo-wyvern-guidance"));
+    const selected = functions().filter(([name]) => bound(binding(name)));
+    const names = [...new Set(selected.map(([name]) => adapterName(binding(name))))];
+    const summary = names.length ? names.join(", ") : "none";
+    if (names.length || status?.reachable !== false) group.append(node("p", "Active adapter: " + summary, "exo-wyvern-active"));
+    const action = node("button", hasBinding() ? "Change Wyverne function" : "Link Wyverne function", "exo-wyvern-action" + (hasBinding() ? " is-bound" : ""));
+    action.type = "button"; action.disabled = saving; action.onclick = openChoices;
+    group.append(action); root.append(group);
   }
+
   async function refresh() {
-    if (closed || loading || saving) return;
+    if (closed || loading || saving || modal) return;
     loading = true;
-    try { const observed = await options.status(); if (!closed) { status = observed; failure = ""; render(); } }
-    catch (error) { if (!closed) { status = { ...status, reachable: false, client_linked: false, llm_ready: false }; failure = error.message; render(); } }
-    finally { loading = false; }
+    try { status = await options.status(); failure = ""; }
+    catch (error) { status = { ...status, reachable: false, llm_ready: false }; failure = error.message; }
+    finally { loading = false; render(); }
   }
+
+  function permittedChoices(name) {
+    const required = status?.functions?.[name]?.required_capabilities || [];
+    const selected = binding(name);
+    const choices = [];
+    for (const adapter of status?.adapters || []) for (const [profile, data] of Object.entries(adapter.profiles || {})) {
+      if (!required.every(capability => (data.capabilities || []).includes(capability)) &&
+          !(selected?.adapter_id === adapter.adapter_id && selected?.profile === profile)) continue;
+      choices.push({ adapter, profile, data, available: adapter.enabled && required.every(capability => (data.capabilities || []).includes(capability)) });
+    }
+    return choices;
+  }
+
+  async function changeBindings(next, expected) {
+    const same = pending && pending.expected_revision === expected && JSON.stringify(pending.bindings) === JSON.stringify(next);
+    const request = same ? pending : { bindings: next, expected_revision: expected, request_id: crypto.randomUUID() };
+    remember(request); saving = true;
+    try {
+      await options.bind(request);
+      const verified = await options.status();
+      const actual = verified.bindings || {};
+      const matches = Object.keys(actual).length === Object.keys(next).length && Object.entries(next).every(([name, value]) =>
+        actual[name]?.adapter_id === value.adapter_id && actual[name]?.profile === value.profile);
+      if (!matches) throw new Error("The updated binding is not yet verified. Retry status before another change.");
+      status = verified; failure = ""; remember(null);
+      modal?.close(); render();
+      return true;
+    } catch (error) {
+      failure = error.message;
+      if (error.status === 409) {
+        remember(null);
+        try { status = await options.status(); } catch { /* Keep the last observed selection. */ }
+        failure = "Binding changed elsewhere. Review the refreshed choices before applying.";
+      }
+      if (modal) modal.querySelector(".exo-wyvern-choice-error").textContent = failure;
+      return false;
+    } finally { saving = false; render(); }
+  }
+
+  function openChoices() {
+    if (closed || modal) return;
+    const previous = document.activeElement;
+    const dialog = node("dialog", undefined, "exo-wyvern-choice" + (options.theme ? " " + options.theme : ""));
+    modal = dialog;
+    const header = node("header", undefined, "exo-wyvern-choice-header");
+    const title = node("h2", "Wyverne Connection"); title.id = "wyvern-choice-" + crypto.randomUUID();
+    dialog.setAttribute("aria-labelledby", title.id);
+    const close = node("button", "×", "exo-wyvern-choice-close");
+    close.type = "button"; close.setAttribute("aria-label", "Close Wyverne Connection");
+    close.onclick = () => { if (!saving) dialog.close(); }; header.append(title, close);
+    const body = node("div", undefined, "exo-wyvern-choice-body");
+    body.append(node("p", "Select an Adapter already granted to this service through Wyvern", "exo-wyvern-choice-intro"));
+    const names = functions().map(([name]) => name);
+    let current = names.find(name => bound(binding(name))) || names[0];
+    if (names.length > 1) {
+      const label = node("label", "Function", "exo-wyvern-function-label");
+      const select = node("select"); select.setAttribute("aria-label", "Wyverne function");
+      for (const name of names) { const option = node("option", name); option.value = name; select.append(option); }
+      select.value = current; select.onchange = () => { current = select.value; drawChoices(); };
+      label.append(select); body.append(label);
+    }
+    const layout = node("div", undefined, "exo-wyvern-choice-layout");
+    const list = node("div", undefined, "exo-wyvern-choice-list");
+    const details = node("div", undefined, "exo-wyvern-choice-details");
+    layout.append(list, details); body.append(layout);
+    const error = node("p", "", "exo-wyvern-choice-error"); error.setAttribute("role", "alert"); body.append(error);
+    const unlink = node("button", "Unlink all adapters", "exo-wyvern-unlink"); unlink.type = "button";
+    if (hasBinding()) body.append(unlink);
+    dialog.append(header, body);
+
+    function drawChoices() {
+      list.replaceChildren(); details.replaceChildren();
+      const choices = current ? permittedChoices(current) : [];
+      if (!status?.reachable) list.append(node("p", "Wyvern is unavailable. The last known selection remains saved. Install or repair it with sudo updater tui."));
+      else if (!current) list.append(node("p", "No service functions are available. Link this client with sudo updater tui."));
+      else if (!choices.length) list.append(node("p", "No permitted Adapters are available. Configure an Adapter for this client with sudo updater tui."));
+      for (const choice of choices) {
+        const active = binding(current);
+        const selected = active?.adapter_id === choice.adapter.adapter_id && active?.profile === choice.profile;
+        const row = node("button", undefined, "exo-wyvern-choice-row" + (selected ? " is-selected" : ""));
+        row.type = "button"; row.disabled = !status?.reachable || !choice.available || saving;
+        row.setAttribute("aria-pressed", String(selected));
+        const mark = node("span", undefined, "exo-wyvern-choice-mark"); mark.setAttribute("aria-hidden", "true");
+        row.append(mark, node("span", "@" + choice.adapter.adapter_id + (Object.keys(choice.adapter.profiles || {}).length > 1 ? " / " + choice.profile : "")));
+        if (!choice.available) row.append(node("span", "Unavailable", "exo-wyvern-choice-unavailable"));
+        row.onclick = async () => {
+          if (saving) return;
+          if (selected && status?.functions?.[current]?.ready) return;
+          const approved = await confirmAgentAction({ title: "Change Adapter binding", message: "Apply " + choice.adapter.name + " / " + choice.profile + " to " + current + " for this service? Other service bindings remain unchanged.", confirmLabel: "Apply binding", theme: options.theme });
+          if (!approved) return;
+          const next = { ...(status.bindings || {}) };
+          next[current] = { adapter_id: choice.adapter.adapter_id, profile: choice.profile };
+          const expected = status.binding_revision;
+          await changeBindings(next, expected);
+          if (dialog.open) drawChoices();
+        };
+        list.append(row);
+        if (selected) {
+          details.append(node("strong", "Active adapter config:"), node("span", "Adapter: " + choice.adapter.name),
+            node("span", "Profile: " + choice.profile), node("span", "Function: " + current),
+            node("span", "Capabilities: " + (choice.data.capabilities || []).join(", ")),
+            node("span", "Readiness: " + (status?.functions?.[current]?.ready ? "Ready" : "Unavailable")));
+        }
+      }
+      details.hidden = !details.childElementCount;
+      layout.classList.toggle("has-details", !details.hidden);
+    }
+
+    unlink.onclick = async () => {
+      if (saving) return;
+      if (!status?.reachable) { error.textContent = "Reconnect Wyvern before changing this service's bindings."; return; }
+      const approved = await confirmAgentAction({ title: "Unlink service Adapters", message: "Remove all Wyvern function bindings for this service? Shared Adapters and other services remain unchanged.", confirmLabel: "Unlink all adapters", theme: options.theme });
+      if (approved) await changeBindings({}, status.binding_revision);
+    };
+    dialog.addEventListener("cancel", event => { if (saving) event.preventDefault(); });
+    dialog.addEventListener("close", () => {
+      modal = null; dialog.remove(); render();
+      const target = root.querySelector(".exo-wyvern-action");
+      if (target) target.focus(); else if (previous?.isConnected) previous.focus();
+      void refresh();
+    }, { once: true });
+    document.body.append(dialog); dialog.showModal();
+    bindDialogInteraction(dialog);
+    const stopDialogGeometry = bindActionGeometry(dialog);
+    dialog.addEventListener("close", stopDialogGeometry, { once: true });
+    drawChoices(); close.focus();
+  }
+
   render(); void refresh();
   const timer = setInterval(() => { if (!document.hidden) void refresh(); }, 15000);
-  return { refresh, close() { closed = true; stopGeometry(); clearInterval(timer); root.replaceChildren(); } };
+  return { refresh, close() { closed = true; clearInterval(timer); modal?.close(); stopGeometry(); root.replaceChildren(); } };
 }

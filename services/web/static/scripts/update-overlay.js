@@ -122,7 +122,7 @@ export function openUpdateOverlay(options) {
     installing = true; error = ""; job = undefined; remember({ request_id: requestID }); render();
     try {
       job = archive ? await json(`/install/${component}`, "POST", archive, { "Content-Type": "application/octet-stream", "X-Update-Receipt": receipt, "X-Update-Saved": "1" })
-        : await json(`/install/${component}`, "POST", { version, request_id: requestID, ...(component === "wyvern" ? { confirm_shared: true } : {}) });
+        : await json(`/install/${component}`, "POST", { version, request_id: requestID });
       remember({ id: job.id, request_id: requestID }); void poll();
     } catch (failure) { error = `${failure.message}. Checking whether the updater accepted the request…`; await recover(); }
     finally { installing = false; render(); }
