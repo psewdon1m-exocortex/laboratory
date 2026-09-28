@@ -1,6 +1,6 @@
 # Deploying laboratory
 
-This document retains the historical laboratory-v0.1.3 deployment sequence below. The current Wyvern integration source is a new unpublished candidate: do not deploy it using that old tag. First qualify Kernel 0.3.0 / Volt 0.2.0 publication support, publish Updater 0.6.0 with Wyvern trust, then Wyvern 0.0.1. Update `.release/updater.version` and `.release/updater.sha256` together from the real signed Updater artifact before building the new Laboratory release. Its existing 0.5.0 pin cannot satisfy the Wyvern capability gate. Source changes are not published releases.
+This document retains the historical laboratory-v0.1.3 deployment sequence below; do not deploy the current integration using that old tag. The current release pins the published Updater 0.6.0 installer and Wyvern 0.0.3 manifest, after verifying the compatible Kernel/Volt publication support. `.release/updater.version` and `.release/updater.sha256` identify the same real signed Updater artifact. Source changes alone are not published releases.
 
 The new installer ensures/reuses Wyvern before starting the consumer. Configure its Adapter in `sudo updater tui`, grant Laboratory access, and select `derivatives` in Settings → Wyvern. Application installation can succeed while LLM configuration is still incomplete. Start production only after the exact immutable tag, anonymous assets, signature, Part 12 report and live-provider check pass. See [Wyvern operations](https://github.com/psewdon1m-exocortex/wyvern/blob/main/docs/operations.md).
 

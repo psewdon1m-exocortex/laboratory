@@ -52,7 +52,8 @@ with tempfile.TemporaryDirectory(prefix="head-bootstrap-test-") as directory:
     (helper / "updater-linux-amd64").chmod(0o755)
     wyvern = work / "wyvern"
     wyvern.mkdir()
-    (wyvern / "wyvern-release.json").write_text(json.dumps({"schema":"exocortex.wyvern.release.v1","product":"wyvern","version":"0.0.1","api_version":1,"config_schema":"exocortex.wyvern.config.v1","image":"ghcr.io/test/wyvern@sha256:"+"b"*64,"capabilities":["text","structured_output","pdf"]}))
+    wyvern_version = (root / ".release/wyvern.version").read_text().strip()
+    (wyvern / "wyvern-release.json").write_text(json.dumps({"schema":"exocortex.wyvern.release.v1","product":"wyvern","version":wyvern_version,"api_version":1,"config_schema":"exocortex.wyvern.config.v1","image":"ghcr.io/test/wyvern@sha256:"+"b"*64,"capabilities":["text","structured_output","pdf"]}))
     run(["node", "scripts/sign-release.mjs", str(wyvern / "wyvern-release.json")], env=env)
     env["WYVERN_BUNDLE_DIR"] = str(wyvern)
     env.update({"GITHUB_REPOSITORY": "psewdon1m-exocortex/" + service,
