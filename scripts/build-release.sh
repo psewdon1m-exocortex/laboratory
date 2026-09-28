@@ -37,12 +37,12 @@ trap 'rm -rf "$stage"' EXIT
 cp "$root/compose.production.yaml" "$root/compose.updater.yaml" \
   "$root/.env.example" "$root/README.md" "$root/DEPLOYMENT.md" "$root/nginx.server.example.conf" "$root/install.sh" "$stage/"
 cp -R "$updater_dir" "$stage/updater"
-"$updater_dir/updater-linux-amd64" wyvern capabilities >/dev/null
-python3 "$root/scripts/verify-wyvern-bundle.py" "$wyvern_dir" "$updater_dir/release-trust/wyvern.pem"
-mkdir -p "$stage/wyvern"
-cp "$wyvern_dir/wyvern-release.json" "$wyvern_dir/wyvern-release.json.sig.json" "$stage/wyvern/"
 find "$stage/updater" -type f -name '*.sh' -exec chmod 0755 {} +
 chmod 0755 "$stage/install.sh" "$stage/updater/updater-linux-amd64"
+"$stage/updater/updater-linux-amd64" wyvern capabilities >/dev/null
+python3 "$root/scripts/verify-wyvern-bundle.py" "$wyvern_dir" "$stage/updater/release-trust/wyvern.pem"
+mkdir -p "$stage/wyvern"
+cp "$wyvern_dir/wyvern-release.json" "$wyvern_dir/wyvern-release.json.sig.json" "$stage/wyvern/"
 sed -i \
   -e "s|^LABORATORY_VERSION=.*|LABORATORY_VERSION=$version|" \
   -e "s|^LABORATORY_IMAGE=.*|LABORATORY_IMAGE=${image_reference}@${image_digest}|" \
