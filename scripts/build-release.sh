@@ -37,6 +37,11 @@ trap 'rm -rf "$stage"' EXIT
 cp "$root/compose.production.yaml" "$root/compose.updater.yaml" \
   "$root/.env.example" "$root/README.md" "$root/DEPLOYMENT.md" "$root/nginx.server.example.conf" "$root/install.sh" "$stage/"
 cp -R "$updater_dir" "$stage/updater"
+helper_root="${HOST_HELPER_BUNDLE_DIR:-$root/.release-inputs/helpers}"
+test -f "$helper_root/neptune/neptune-linux-release-linux-x64.json.sig.json"
+test -f "$helper_root/neptune/neptune-linux-$(tr -d '[:space:]' < "$root/.release/neptune.version")-linux-x64.tar.gz"
+mkdir -p "$stage/helpers"
+cp -R "$helper_root/neptune" "$stage/helpers/"
 find "$stage/updater" -type f -name '*.sh' -exec chmod 0755 {} +
 chmod 0755 "$stage/install.sh" "$stage/updater/updater-linux-amd64"
 "$stage/updater/updater-linux-amd64" wyvern capabilities >/dev/null

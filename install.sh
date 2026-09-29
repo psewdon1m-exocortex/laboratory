@@ -68,6 +68,9 @@ copy_release_files() {
     install -m 0644 "$script_dir/updater/systemd/updater.service" "$target/updater/systemd/updater.service"
     install -d -m 0755 "$target/updater/release-trust"
     for scope in updater neptune gryphon wyvern; do install -m 0644 "$script_dir/updater/release-trust/$scope.pem" "$target/updater/release-trust/$scope.pem"; done
+	[ -d "$script_dir/helpers/neptune" ] || fail "release bundle is missing Neptune"
+	install -d -m 0755 "$target/helpers"
+	cp -R "$script_dir/helpers/neptune" "$target/helpers/"
   fi
 }
 
@@ -138,6 +141,10 @@ validate_install() {
 install_release() {
   validate_install
   "$target/updater/install.sh" "$service_id" "$env_file" "$target/updater/updater-linux-amd64"
+  if [ -f /etc/exocortex/updater-kernel.token ] && [ -n "$(get_env KERNEL_URL)" ]; then
+    updater host configure-kernel --url "$(get_env KERNEL_URL)" --token-file /etc/exocortex/updater-kernel.token
+  fi
+  updater neptune install --bundle "$target/helpers/neptune"
   updater wyvern capabilities >/dev/null || fail "Updater with Wyvern v1 is required"
   updater wyvern bootstrap --head laboratory --manifest "$target/wyvern/wyvern-release.json"
   socket_dir=$(get_env UPDATER_SOCKET_DIR); socket_dir=${socket_dir:-/run/exocortex}

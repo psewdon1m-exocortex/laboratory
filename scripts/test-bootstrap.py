@@ -56,11 +56,16 @@ with tempfile.TemporaryDirectory(prefix="head-bootstrap-test-") as directory:
     (wyvern / "wyvern-release.json").write_text(json.dumps({"schema":"exocortex.wyvern.release.v1","product":"wyvern","version":wyvern_version,"api_version":1,"config_schema":"exocortex.wyvern.config.v1","image":"ghcr.io/test/wyvern@sha256:"+"b"*64,"capabilities":["text","structured_output","pdf"]}))
     run(["node", "scripts/sign-release.mjs", str(wyvern / "wyvern-release.json")], env=env)
     env["WYVERN_BUNDLE_DIR"] = str(wyvern)
+    bundled = work / "helpers" / "neptune"
+    bundled.mkdir(parents=True)
+    (bundled / "neptune-linux-release-linux-x64.json.sig.json").write_text("{}")
+    (bundled / ("neptune-linux-" + (root / ".release/neptune.version").read_text().strip() + "-linux-x64.tar.gz")).write_bytes(b"synthetic signed helper fixture")
     env.update({"GITHUB_REPOSITORY": "psewdon1m-exocortex/" + service,
                 "IMAGE_REFERENCE": "ghcr.io/psewdon1m-exocortex/" + service,
                 "IMAGE_DIGEST": "sha256:" + "a" * 64,
                 "UPDATER_BUNDLE_DIR": str(helper),
-                "UPDATER_BUNDLE_VERSION": (root / ".release/updater.version").read_text().strip()})
+                "UPDATER_BUNDLE_VERSION": (root / ".release/updater.version").read_text().strip(),
+                "HOST_HELPER_BUNDLE_DIR": str(work / "helpers")})
     run(["bash", "scripts/build-release.sh", version, str(output)], env=env)
     manifest = output / (service + "-release.json")
     run(["node", "scripts/sign-release.mjs", str(manifest)], env=env)
