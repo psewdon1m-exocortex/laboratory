@@ -401,9 +401,6 @@ function renderRuntime(runtime) {
   const helper = document.querySelector("[data-update-helper]");
   helper.textContent = runtime.updater?.available ? "Service Reachability" : "Service Unavailable";
   helper.closest(".exo-agent-status").dataset.state = runtime.updater?.available ? "ready" : "unavailable";
-  document.querySelector("[data-updater-status]").textContent = runtime.updater?.available
-    ? `${runtime.updater.status} / ${runtime.updater.version}`
-    : "Not connected";
 }
 
 function renderNeptune(status) {
@@ -778,4 +775,3 @@ document.querySelector("[data-kernel-token-form]").addEventListener("submit", as
   } catch (error) { showToast(error.message); }
   finally { button.disabled = false; }
 });
-document.querySelector("[data-updater-self]").addEventListener("click", () => openUpdates("updater"));

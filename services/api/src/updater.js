@@ -93,9 +93,6 @@ export class UpdaterClient {
     }, true, 30_000);
   }
 
-  updateSelf() {
-    return this.request("POST", "/v1/lifecycle/updater-self-update", { head_id: this.headId }, true, 30_000);
-  }
 }
 
 function versionTuple(value) {

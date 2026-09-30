@@ -744,7 +744,7 @@ export async function createLaboratoryApp(overrides = {}) {
     } catch (error) { next(error); }
   });
   app.post("/api/updates/agent/install", auth.requireMutation, async (_req, res, next) => {
-    try { res.status(202).json(await updater.updateSelf()); } catch (error) { next(error); }
+    res.status(403).json({ error: "Update Updater with sudo updater tui on the host" });
   });
 
   app.post("/api/neptune/update/check", auth.requireMutation, async (_req, res, next) => {
@@ -817,7 +817,7 @@ export async function createLaboratoryApp(overrides = {}) {
     catch (error) { next(error); }
   });
 
-  mountUpdateFlow(app, { prefix: "/api/update-flow", service: "laboratory", helpers: ["updater", "neptune"], authorize: auth.requireAdmin, mutation: [auth.requireMutation],
+  mountUpdateFlow(app, { prefix: "/api/update-flow", service: "laboratory", helpers: ["neptune"], authorize: auth.requireAdmin, mutation: [auth.requireMutation],
     headId: config.updaterHeadId, token: () => config.updaterControlToken,
     client: { status: () => updater.status(), request: (method, route, body) => updater.request(method, route, body, true, 90_000) },
     backupGuard: archiveOperation,

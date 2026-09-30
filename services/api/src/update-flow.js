@@ -4,7 +4,7 @@ import { backupReceipt, savedBackup } from "./update-backup.js";
 
 // The head owns authentication and its standard backup builder. The privileged
 // daemon owns release discovery, signature verification and durable jobs.
-export function mountUpdateFlow(app, { prefix, service, helpers = ["updater", "neptune"], authorize, mutation = [], headId, token, client, buildBackup, onJob, backupGuard = action => action }) {
+export function mountUpdateFlow(app, { prefix, service, helpers = ["neptune"], authorize, mutation = [], headId, token, client, buildBackup, onJob, backupGuard = action => action }) {
   const router = express.Router();
   router.use(authorize);
   const stable = value => typeof value === "string" && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value);
@@ -12,6 +12,7 @@ export function mountUpdateFlow(app, { prefix, service, helpers = ["updater", "n
   const wrap = action => async (req, res, next) => { try { await action(req, res); } catch (error) { next(error); } };
   const id = value => { if (!/^[A-Za-z0-9-]{1,128}$/.test(value)) throw fail("Invalid update job"); return value; };
   const check = async component => {
+    if (component === "updater") throw Object.assign(new Error("Check Updater releases with sudo updater tui on the host"), { status: 403 });
     if (![service, ...helpers].includes(component)) throw fail("This service does not use the requested component");
     const health = await client.status();
     if (health.update_protocol !== 2) throw Object.assign(new Error("Updater 0.5.0 or later is required for the saved-copy update protocol"), { status: 426 });
@@ -35,6 +36,7 @@ export function mountUpdateFlow(app, { prefix, service, helpers = ["updater", "n
   })));
   router.post("/install/:component", ...mutation, express.raw({ type: "application/octet-stream", limit: "128mb" }), wrap(async (req, res) => {
     const component = req.params.component;
+    if (component === "updater") throw Object.assign(new Error("Update Updater with sudo updater tui on the host"), { status: 403 });
     let job;
     if (component === service) {
       if (req.get("X-Update-Saved") !== "1" || !Buffer.isBuffer(req.body)) throw fail("Save the standard ZIP on your computer before installing");

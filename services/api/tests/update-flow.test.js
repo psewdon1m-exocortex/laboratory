@@ -6,7 +6,7 @@ import test from "node:test";
 import { createLaboratoryApp } from "../src/server.js";
 import { parseBackup } from "../src/backup.js";
 
-test("Laboratory update uses one standard ZIP, enforces session/CSRF/save receipt, and keeps helper updates backup-free", async context => {
+test("Laboratory update uses one standard ZIP and keeps Updater self-update in the host TUI", async context => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "laboratory-update-v2-"));
   const app = await createLaboratoryApp({ dataDir, accessKey: "synthetic-update-access-key", sessionSecret: "synthetic-session-secret-which-is-long-enough", updaterControlToken: "synthetic-update-control-token", cookieSecure: false, kernelUrl: "", kernelServiceToken: "", derivedContentEnabled: false });
   const runtime = app.locals.laboratory, submitted = [];
@@ -33,6 +33,7 @@ test("Laboratory update uses one standard ZIP, enforces session/CSRF/save receip
   assert.equal((await fetch(`${base}/api/update-flow/backup`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ version: "0.1.8" }) })).status, 403);
   const headers = { cookie, "content-type": "application/json", "X-CSRF-Token": csrfToken };
   assert.equal((await fetch(`${base}/api/update-flow/check`, { method: "POST", headers, body: JSON.stringify({ component: "wyvern" }) })).status, 400);
+  assert.equal((await fetch(`${base}/api/update-flow/check`, { method: "POST", headers, body: JSON.stringify({ component: "updater" }) })).status, 403);
   assert.equal((await fetch(`${base}/api/update-flow/install/wyvern`, { method: "POST", headers, body: JSON.stringify({ version: "0.1.8", request_id: "01234567-0123-4123-8123-012345678901", confirm_shared: true }) })).status, 400);
   assert.equal((await fetch(`${base}/api/admin/wyvern/connect`, { method: "POST", headers, body: JSON.stringify({ request_id: "01234567-0123-4123-8123-012345678901" }) })).status, 403);
   assert.equal((await fetch(`${base}/api/admin/wyvern/management`, { headers })).status, 403);
@@ -47,9 +48,9 @@ test("Laboratory update uses one standard ZIP, enforces session/CSRF/save receip
   assert.equal((await fetch(`${base}/api/update-flow/install/laboratory`, { method: "POST", headers: raw, body: archive })).status, 202);
   assert.equal(submitted.length, 1);
   assert.deepEqual(Buffer.from(submitted[0].body.backup.data_base64, "base64"), archive);
-  assert.equal((await fetch(`${base}/api/update-flow/install/updater`, { method: "POST", headers, body: JSON.stringify({ version: "0.4.10", request_id: "01234567-0123-4123-8123-012345678901" }) })).status, 202);
-  assert.equal(submitted[1].route, "/v2/components/updater/updates");
-  assert.equal(submitted[1].body.backup, undefined);
+  assert.equal((await fetch(`${base}/api/update-flow/install/updater`, { method: "POST", headers, body: JSON.stringify({ version: "0.4.10", request_id: "01234567-0123-4123-8123-012345678901" }) })).status, 403);
+  assert.equal((await fetch(`${base}/api/updates/agent/install`, { method: "POST", headers })).status, 403);
+  assert.equal(submitted.length, 1);
   assert.equal((await fetch(`${base}/api/updates/apply`, { method: "POST", headers, body: JSON.stringify({ version: "0.1.8" }) })).status, 426);
   runtime.store.saveRestorePoint = async () => { throw new Error("Updater rollback must not retain another archive"); };
   runtime.derivedContent.configure({ enabled: false, prompt: "A different valid instruction written after the backup was taken." });
