@@ -540,7 +540,7 @@ export async function createLaboratoryApp(overrides = {}) {
   app.get("/api/admin/documentation", auth.requireAdmin, (_req, res) => res.json({ sections: [
     { title: "Security", body: "Sign in with the Access Key. Rotation revokes other sessions. Kernel tokens are write-only and validated before replacement." },
     { title: "Recovery", body: "ZIP archives include content, settings, revisions, queues, the Access Key verifier and non-secret Wyvern binding choices. Restore replaces application state and signs out all sessions. Target machine enrollment remains in place. Restored Wyvern choices await matching bindings or explicit selection in Settings; restore never changes the shared gateway." },
-    { title: "Connections", body: "Kernel resolves current service origins. Wyvern holds provider credentials and executes requests through the selected Adapter. Initialize Neptune with a setup code from Saturn. Schedules and remote backup runs are managed in Saturn → Synchronization." },
+    { title: "Connections", body: "Kernel resolves current service origins. Wyvern holds provider credentials and executes requests through the selected Adapter. Initialize Neptune with a setup code from Saturn. Configure automatic backups in Laboratory Settings; Saturn stores the schedule." },
     { title: "Updates", body: "Updater checks scoped signed releases, makes a recovery archive and verifies health after replacement. Monitor the job until it reaches a terminal state." },
     { title: "Part 12: deployment checks", body: "Check core readiness, enrollment, last seen and last successful backup separately. Unknown or stale does not mean zero. After a change verify public DNS/TLS, authenticated integrations and a downloaded-backup restore. Keep the job ID and redacted logs when investigating a failure; never include access keys or tokens." }
   ] }));
@@ -709,7 +709,7 @@ export async function createLaboratoryApp(overrides = {}) {
   app.get("/api/neptune/policy", auth.requireAdmin, async (_req, res) => res.json(await backupPolicy.read()));
   app.put("/api/neptune/policy", auth.requireMutation, async (req, res) => res.json(await backupPolicy.mutate(req.body)));
   app.get("/api/neptune/policy/runs", auth.requireAdmin, async (_req, res) => res.json(await backupPolicy.runs()));
-  app.post("/api/neptune/policy/runs", auth.requireMutation, async (req, res) => res.status(202).json(await backupPolicy.runs("POST", req.body)));
+  app.post("/api/neptune/policy/runs", auth.requireMutation, (_req, res) => res.status(403).json({ error: "Manual Neptune runs are unavailable; configure the automatic schedule in Settings" }));
 
   app.post("/api/internal/neptune/backup", async (req, res, next) => {
     try {
@@ -747,23 +747,15 @@ export async function createLaboratoryApp(overrides = {}) {
     res.status(403).json({ error: "Update Updater with sudo updater tui on the host" });
   });
 
-  app.post("/api/neptune/update/check", auth.requireMutation, async (_req, res, next) => {
-    try {
-      const status = await neptune.status();
-      res.json(await updater.checkNeptune(status.version));
-    } catch (error) { next(error); }
+  app.post("/api/neptune/update/check", auth.requireMutation, (_req, res) => {
+    res.status(403).json({ error: "Check Neptune releases with sudo updater tui on the host" });
   });
-
-  app.post("/api/neptune/update/install", auth.requireMutation, async (req, res, next) => {
-    try {
-      const requestedVersion = String(req.body?.version ?? "");
-      const status = await neptune.status();
-      const update = await updater.checkNeptune(status.version);
-      if (!update.update_available || update.available_version !== requestedVersion) {
-        return res.status(409).json({ error: "Requested Neptune version is not the current upgrade candidate" });
-      }
-      res.json(await updater.updateNeptune(requestedVersion));
-    } catch (error) { next(error); }
+  app.post("/api/neptune/unlink", auth.requireMutation, async (req, res, next) => {
+    try { res.status(202).json(await updater.unlinkNeptune(req.body?.request_id)); }
+    catch (error) { next(error); }
+  });
+  app.post("/api/neptune/update/install", auth.requireMutation, (_req, res) => {
+    res.status(403).json({ error: "Update Neptune with sudo updater tui on the host" });
   });
 
   app.get("/api/admin/audit", auth.requireAdmin, async (req, res, next) => {
@@ -817,7 +809,7 @@ export async function createLaboratoryApp(overrides = {}) {
     catch (error) { next(error); }
   });
 
-  mountUpdateFlow(app, { prefix: "/api/update-flow", service: "laboratory", helpers: ["neptune"], authorize: auth.requireAdmin, mutation: [auth.requireMutation],
+  mountUpdateFlow(app, { prefix: "/api/update-flow", service: "laboratory", helpers: [], authorize: auth.requireAdmin, mutation: [auth.requireMutation],
     headId: config.updaterHeadId, token: () => config.updaterControlToken,
     client: { status: () => updater.status(), request: (method, route, body) => updater.request(method, route, body, true, 90_000) },
     backupGuard: archiveOperation,

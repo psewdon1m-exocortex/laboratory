@@ -34,6 +34,10 @@ test("Laboratory update uses one standard ZIP and keeps Updater self-update in t
   const headers = { cookie, "content-type": "application/json", "X-CSRF-Token": csrfToken };
   assert.equal((await fetch(`${base}/api/update-flow/check`, { method: "POST", headers, body: JSON.stringify({ component: "wyvern" }) })).status, 400);
   assert.equal((await fetch(`${base}/api/update-flow/check`, { method: "POST", headers, body: JSON.stringify({ component: "updater" }) })).status, 403);
+  assert.equal((await fetch(`${base}/api/update-flow/check`, { method: "POST", headers, body: JSON.stringify({ component: "neptune" }) })).status, 403);
+  assert.equal((await fetch(`${base}/api/update-flow/install/neptune`, { method: "POST", headers, body: "{}" })).status, 403);
+  for (const route of ["/api/neptune/policy/runs", "/api/neptune/update/check", "/api/neptune/update/install"])
+    assert.equal((await fetch(`${base}${route}`, { method: "POST", headers, body: "{}" })).status, 403);
   assert.equal((await fetch(`${base}/api/update-flow/install/wyvern`, { method: "POST", headers, body: JSON.stringify({ version: "0.1.8", request_id: "01234567-0123-4123-8123-012345678901", confirm_shared: true }) })).status, 400);
   assert.equal((await fetch(`${base}/api/admin/wyvern/connect`, { method: "POST", headers, body: JSON.stringify({ request_id: "01234567-0123-4123-8123-012345678901" }) })).status, 403);
   assert.equal((await fetch(`${base}/api/admin/wyvern/management`, { headers })).status, 403);

@@ -27,7 +27,7 @@ failed, unknown or unsupported `N/A` evidence blocks publication. The workflow e
 ## Backup status
 
 Laboratory logical backup and restore follow
-[Part 03](https://github.com/psewdon1m-exocortex/general/blob/main/PART_03_BACKUP_AND_RECOVERY.md). The operator authorized the additive Laboratory + Neptune profile on 2026-09-14. Its own deployment profile validates the bindings without changing Kernel's six-service seed. Initialize Neptune from /private with a Saturn setup code; Saturn → Synchronization owns schedules and remote runs.
+[Part 03](https://github.com/psewdon1m-exocortex/general/blob/main/PART_03_BACKUP_AND_RECOVERY.md). The operator authorized the additive Laboratory + Neptune profile on 2026-09-14. Its own deployment profile validates the bindings without changing Kernel's six-service seed. Initialize Neptune from `/private` with a Saturn setup code. Laboratory Settings owns its automatic backup switch and hourly interval; Saturn → Synchronization manages enrollment, quotas and observation. The service has no manual remote-run action. Neptune release operations use `sudo updater tui`.
 
 Laboratory is the English-only publication module of Exocortex. It keeps the
 photographic, grain-driven visual language of `simple_site` while providing:
@@ -467,8 +467,9 @@ under `docs/`.
 
 See [Update protocol, saved ZIP and first migration](docs/UPDATE-PROTOCOL.md).
 The UI uses Updater **0.6.0**, an exact selected version, the standard ZIP saved
-on the operator PC, and durable status/progress. Helper updates use the same
-dialog without a backup. No update ZIP is retained on the application host.
+on the operator PC, and durable status/progress for Laboratory releases.
+Shared Updater, Neptune, Gryphon and Wyvern release operations use
+`sudo updater tui` on the host. No update ZIP is retained on the application host.
 
 Release builds pin the published Updater 0.6.0 installer by the SHA-256 in
 `.release/updater.sha256` and verify it before extraction. This digest was

@@ -16,6 +16,10 @@ const articlesRoot = document.querySelector("[data-admin-articles]");
 const runtimeRoot = document.querySelector("[data-runtime]");
 const neptuneRuntime = document.querySelector("[data-neptune-runtime]");
 const neptuneResult = document.querySelector("[data-neptune-result]");
+const neptuneStatusRow = document.querySelector("[data-neptune-status]");
+const neptuneStatusText = document.querySelector("[data-neptune-status-text]");
+const neptuneLink = document.querySelector("[data-neptune-initialize]");
+const neptuneUnlink = document.querySelector("[data-neptune-unlink]");
 const toast = document.querySelector("[data-toast]");
 const importForm = document.querySelector("[data-article-import-form]");
 const editor = document.querySelector("[data-article-editor]");
@@ -424,13 +428,26 @@ function runtimeItemInto(root, name, value) {
 async function loadNeptune() {
   try {
     const availability = await api("/api/neptune/availability");
-    document.querySelector("[data-neptune-version]").textContent = availability.version || neptuneStatus?.version || "Unavailable";
+    const linked = availability.state === "linked" || availability.linked === true;
+    neptuneStatusRow.dataset.state = availability.state === "linked" ? "ready" : "unavailable";
+    neptuneStatusText.textContent = availability.state === "linked" ? "Reachability" : availability.state === "unlinking" ? "Unlinking"
+      : availability.state === "unlinked" ? "Not linked"
+        : availability.state === "authorization_failed" ? "Authorization failed" : "Unavailable";
+    neptuneLink.hidden = linked;
+    neptuneLink.disabled = availability.state === "unavailable" && availability.linked !== false;
+    neptuneUnlink.hidden = !linked;
+    neptuneUnlink.disabled = !["linked", "unlinking"].includes(availability.state);
+    neptuneUnlink.textContent = availability.state === "unlinking" ? "Retry Neptune unlink" : "Unlink Neptune agent";
     if (availability.state === "linked") { neptuneStatus = availability; renderNeptune(availability); }
     else {
       if (neptuneStatus) renderNeptune(neptuneStatus);
-      neptuneResult.textContent = availability.state === "authorization_failed" ? "Authorization failed." : availability.state === "unlinked" ? "The project is not enrolled." : "Neptune is unavailable. Last verified state is retained.";
+      neptuneResult.textContent = availability.error || (availability.state === "unlinking" ? "Neptune is draining accepted transfers. Retry unlink if the previous job failed." : availability.state === "authorization_failed" ? "Authorization failed." : availability.state === "unlinked" ? "The project is not enrolled." : "Neptune is unavailable. Last verified state is retained.");
     }
-  } catch (error) { neptuneResult.textContent = error.message; }
+  } catch (error) {
+    neptuneStatusRow.dataset.state = "unavailable";
+    neptuneStatusText.textContent = "Unavailable";
+    neptuneResult.textContent = error.message;
+  }
 }
 
 async function loadState() {
@@ -669,7 +686,6 @@ function openUpdates(component = "laboratory") {
     headers: () => ({ "X-CSRF-Token": csrfToken }), onComplete: () => Promise.all([loadState(), loadNeptune()]) });
 }
 document.querySelector("[data-update-check]").addEventListener("click", () => openUpdates());
-document.querySelector("[data-neptune-check]").addEventListener("click", () => openUpdates("neptune"));
 
 async function initialize() {
   bindThemeControls();
@@ -739,13 +755,25 @@ function initializeNeptune() {
     },
     verify: async () => {
       const availability = await api("/api/neptune/availability");
-      document.querySelector("[data-neptune-version]").textContent = availability.version || neptuneStatus?.version || "Unavailable";
       return { ready: availability.state === "linked" && availability.linked === true, message: "The scoped archive connection is not verified." };
     },
     onComplete: () => loadNeptune(),
   });
 }
 document.querySelector("[data-neptune-initialize]").addEventListener("click", initializeNeptune);
+neptuneUnlink.addEventListener("click", async () => {
+  if (!await confirmAction({ title: "Unlink Neptune agent", confirmLabel: "Unlink agent", danger: true,
+    message: "Automatic Laboratory backups will stop. Saved archives remain in Saturn. Other services and the shared Neptune agent stay connected. A new setup code will be needed to link Laboratory again." })) return;
+  neptuneUnlink.disabled = true;
+  neptuneResult.textContent = "Stopping new backups and waiting for accepted transfers…";
+  try {
+    const started = await mutation("/api/neptune/unlink", { method: "POST", body: "{}" });
+    await waitJob(started, neptuneResult);
+    await loadNeptune();
+    showToast("Laboratory unlinked from Neptune. Automatic backups are off.");
+  } catch (error) { neptuneResult.textContent = error.message; showToast(error.message); }
+  finally { if (!neptuneUnlink.hidden) neptuneUnlink.disabled = false; }
+});
 for (const [selector, route] of [["[data-access-key-form]", "/api/admin/security/access-key"], ["[data-kernel-form]", "/api/admin/security/kernel"]]) {
   document.querySelector(selector).addEventListener("submit", async (event) => {
     event.preventDefault(); const form = event.currentTarget, button = form.querySelector("button"); button.disabled = true;

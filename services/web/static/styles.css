@@ -2322,3 +2322,20 @@ dialog.exo-initialize.laboratory > header h2 { font-family: inherit; line-height
 :root dialog.exo-wyvern-choice.laboratory .exo-wyvern-choice-mark { border-color:var(--line); }
 :root dialog.exo-wyvern-choice.laboratory .exo-wyvern-choice-row.is-selected .exo-wyvern-choice-mark { border-color:var(--accent); background:var(--accent); box-shadow:inset 0 0 0 4px var(--surface); }
 :root dialog.exo-wyvern-choice.laboratory .exo-wyvern-unlink { border-color:var(--negative,#a32626); color:var(--negative,#a32626); }
+/* Keep Laboratory's editorial theme while following the shared Backup layout. */
+.laboratory-backup-groups { display:grid; gap:clamp(36px,4vw,54px); margin-top:30px; }
+.laboratory-backup-group { min-width:0; display:grid; gap:12px; align-content:start; }
+.laboratory-backup-group > h3 { margin:0; font-size:1.2rem; line-height:1.3; }
+.laboratory-backup-group > p { margin:0; color:var(--muted); }
+.admin-page .laboratory-backup-group > :is(.button-link,button[data-restore-open]) { display:inline-flex; align-items:center; justify-content:center; width:min(742px,100%); min-height:40px; margin-top:8px; }
+.laboratory-backup-group [data-neptune-status] { margin-top:8px; }
+.laboratory-backup-group [data-backup-policy] { min-width:0; margin-top:0; }
+.admin-page .laboratory-backup-group > :is([data-neptune-initialize],[data-neptune-unlink]) { width:min(280px,100%); min-height:40px; margin-top:8px; }
+.admin-page .laboratory-backup-group > .backup-unlink-action:disabled { color:var(--negative,#a32626) !important; border-color:var(--negative,#a32626) !important; opacity:1; }
+.laboratory-backup-group [hidden] { display:none !important; }
+.laboratory-backup-group [data-neptune-result]:empty { display:none; }
+.laboratory-backup-group [data-neptune-result] { color:var(--negative,#a32626); }
+.laboratory-backup-details { color:var(--muted); }
+.laboratory-backup-details summary { cursor:pointer; }
+.laboratory-backup-details .runtime-grid { margin-top:12px; }
+@media(max-width:720px) { .laboratory-backup-groups { gap:36px; } }

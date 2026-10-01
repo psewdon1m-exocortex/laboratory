@@ -54,7 +54,7 @@ export function createNeptuneClient(config) {
     async availability() {
       try {
         const status = await call(config, "GET", "/status");
-        lastKnown = { ...status, installed: true, linked: true, state: "linked", last_verified_at: new Date().toISOString() };
+        lastKnown = { ...status, installed: true, linked: true, state: status.project?.unlinking ? "unlinking" : "linked", last_verified_at: new Date().toISOString() };
         return lastKnown;
       } catch (error) {
         const state = error.upstreamStatus === 404 ? "unlinked" : [401, 403].includes(error.upstreamStatus) ? "authorization_failed" : "unavailable";

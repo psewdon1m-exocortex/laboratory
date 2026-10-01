@@ -94,22 +94,30 @@
           <div class="admin-articles" data-admin-articles></div>
         </section>
 
-        <section class="admin-card section-card">
+        <section class="admin-card section-card laboratory-backup">
           <div class="section-heading"><h2>Backup</h2><p>Manual recovery archives and automatic Neptune delivery to Saturn use the same ZIP bytes.</p></div>
-          <div class="system-actions">
-            <a class="button-link" href="/api/admin/backup" data-backup-download>Download backup</a>
-            <button type="button" data-restore-open>Restore backup</button>
+          <div class="laboratory-backup-groups">
+            <section class="laboratory-backup-group">
+              <h3>Manual snapshot</h3>
+              <p>Download the recovery archive to this computer. Service credentials remain outside the snapshot.</p>
+              <a class="button-link" href="/api/admin/backup" data-backup-download>Create and download snapshot</a>
+            </section>
+            <section class="laboratory-backup-group">
+              <h3>Automatic backup to Saturn</h3>
+              <p>Neptune uploads the same recovery ZIP on the saved schedule without changing its bytes.</p>
+              <div class="exo-agent-status" data-neptune-status data-state="busy"><span>Local Neptune agent:</span><strong><span data-neptune-status-text>Checking</span><i aria-hidden="true"></i></strong></div>
+              <div data-backup-policy></div>
+              <button type="button" data-neptune-initialize>Link Neptune agent</button>
+              <button type="button" class="backup-unlink-action" data-neptune-unlink hidden>Unlink Neptune agent</button>
+              <p class="admin-note" data-neptune-result role="alert"></p>
+              <details class="laboratory-backup-details"><summary>Agent details</summary><dl class="runtime-grid" data-neptune-runtime></dl></details>
+            </section>
+            <section class="laboratory-backup-group">
+              <h3>Restore snapshot</h3>
+              <p>Inspect a local recovery archive before confirming replacement.</p>
+              <button type="button" data-restore-open>Browse local snapshot archive</button>
+            </section>
           </div>
-          <dl class="runtime-grid" data-neptune-runtime></dl>
-          <div class="neptune-controls">
-            <p>Set this service’s automatic backup schedule and request remote backups here.</p>
-            <div data-backup-policy></div>
-            <button type="button" data-neptune-initialize>Initialize</button>
-          </div>
-          <div class="neptune-version-group"><h3>Neptune version</h3><p>Current installed version: <span data-neptune-version>Checking…</span></p>
-            <button type="button" class="button-quiet" data-neptune-check>Check Neptune for updates</button>
-          </div>
-          <p class="admin-note" data-neptune-result></p>
         </section>
 
         <section class="admin-card section-card laboratory-agents">
