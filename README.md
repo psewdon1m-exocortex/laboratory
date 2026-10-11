@@ -61,6 +61,14 @@ npm start
 The default address is `http://127.0.0.1:18380`. Local credentials are read from
 the ignored root `.env`; production credentials must be injected separately.
 
+The default brand artwork is `.src/The_Garden_of_Earthly_Delights.png`.
+Run `node scripts/generate-branding.mjs` from the repository root after installing
+the API dependencies to regenerate the full-size `logo.png`, 512 px PNG favicon,
+multi-size ICO (16–256 px), 180 px Apple icon and 1731 × 909 px link preview in
+`services/web/static/`. Icons preserve the complete artwork; the link preview
+places it beside the existing site wording. Uploaded Web Icon and Link preview
+image settings continue to override the defaults.
+
 Docker development is also available:
 
 ```bash

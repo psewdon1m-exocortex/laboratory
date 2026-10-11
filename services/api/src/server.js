@@ -838,11 +838,11 @@ export async function createLaboratoryApp(overrides = {}) {
     }, backupUpload.single("file"))(req, res, next);
   });
 
-  app.get("/favicon.png", async (_req, res, next) => {
+  app.get(["/favicon.png", "/apple-touch-icon.png"], async (req, res, next) => {
     try {
       const icon = await store.readAsset("webIcon");
       res.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
-      if (!icon) return res.sendFile("favicon.png", { root: config.publicDir });
+      if (!icon) return res.sendFile(req.path === "/apple-touch-icon.png" ? "apple-touch-icon.png" : "favicon.png", { root: config.publicDir });
       res.type(icon.mime).send(icon.data);
     } catch (error) { next(error); }
   });
